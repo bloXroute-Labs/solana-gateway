@@ -1,0 +1,15 @@
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.log
+*.test
+*.out
+
+.idea/
+.pcap
+
+vendor/
+logs/
+bin
