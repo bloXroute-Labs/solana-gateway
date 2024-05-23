@@ -29,7 +29,7 @@ type Gateway struct {
 	conn                         *net.UDPConn
 	solana                       *net.UDPAddr
 	bdn                          *net.UDPAddr
-	bdnRegister                  func() error
+	registrar                    Registrar
 	bdnRegisterInactivityTrigger *inactivitytrigger.InactivityTrigger
 
 	passiveMode bool
@@ -39,7 +39,7 @@ type Option func(*Gateway)
 
 func PassiveMode() Option { return func(g *Gateway) { g.passiveMode = true } }
 
-func New(ctx context.Context, lg logger.Logger, cache *cache.AlterKey, conn *net.UDPConn, solana, bdn *net.UDPAddr, stats *bdn.Stats, nl *netlisten.NetworkListener, bdnRegister func() error, opts ...Option) *Gateway {
+func New(ctx context.Context, lg logger.Logger, cache *cache.AlterKey, conn *net.UDPConn, solana, bdn *net.UDPAddr, stats *bdn.Stats, nl *netlisten.NetworkListener, registrar Registrar, opts ...Option) *Gateway {
 	gw := &Gateway{
 		ctx:         ctx,
 		lg:          lg,
@@ -51,9 +51,9 @@ func New(ctx context.Context, lg logger.Logger, cache *cache.AlterKey, conn *net
 		solana:      solana,
 		bdn:         bdn,
 		passiveMode: false,
-		bdnRegister: bdnRegister,
+		registrar:   registrar,
 		bdnRegisterInactivityTrigger: inactivitytrigger.NewInactivityTrigger(ctx, func() {
-			if err := bdnRegister(); err != nil {
+			if err := registrar.Register(); err != nil {
 				lg.Errorf("retry register due to bdn inactivity failed: %s", err)
 			}
 		}, time.Minute),
@@ -72,7 +72,7 @@ func (g *Gateway) Start() {
 		sol2bdnCh = make(chan *solana.PartialShred, 1e5)
 	)
 
-	if err := g.bdnRegister(); err != nil {
+	if err := g.registrar.Register(); err != nil {
 		// This is fine until we update relays
 		g.lg.Warnf("failed register to bdn during start: %s", err)
 	}

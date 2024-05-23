@@ -4,7 +4,6 @@ import (
 	"fmt"
 
 	log "github.com/bloXroute-Labs/gateway/v2/logger"
-	"github.com/sirupsen/logrus"
 )
 
 type Config struct {
@@ -50,10 +49,11 @@ func New(cfg *Config) (Logger, error) {
 		log.Fatal("invalid file log level: ", err)
 	}
 
+	var fluentDConfig *log.FluentDConfig
 	if cfg.Fluentd {
-		err := log.InitFluentD(true, cfg.FluentHost, "solana-gateway", logrus.InfoLevel)
-		if err != nil {
-			return nil, err
+		fluentDConfig = &log.FluentDConfig{
+			FluentDHost: cfg.FluentHost,
+			Level:       log.InfoLevel,
 		}
 	}
 
@@ -65,7 +65,7 @@ func New(cfg *Config) (Logger, error) {
 		MaxSize:      cfg.MaxSize,
 		MaxBackups:   cfg.MaxBackups,
 		MaxAge:       cfg.MaxAge,
-	}, cfg.Version)
+	}, fluentDConfig, cfg.Version)
 
 	if err != nil {
 		return nil, err

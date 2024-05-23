@@ -15,36 +15,6 @@ import (
 // the merkle proof embedded in the payload but itself is not
 // stored the payload.
 //
-// Shred anatomy:
-//
-//	Legacy Data (1228b):
-//	+---------------------+--------------------+-----------------+
-//	| COMMON_HEADER (83b) | DATA HEADER (88b)  | PAYLOAD (1057b) |
-//	+---------------------+--------------------+-----------------+
-//	| [SIG, VARIANT, ...] | [FLAGS, SIZE, ...] | BINARY DATA     |
-//	+---------------------+--------------------+-----------------+
-//
-//	Legacy Coding (1228b):
-//	+---------------------+---------------------+-----------------+
-//	| COMMON_HEADER (83b) | CODING HEADER (89b) | PAYLOAD (1057b) |
-//	+---------------------+---------------------+-----------------+
-//	| [SIG, VARIANT, ...] | [FLAGS, SIZE, ...]  | BINARY DATA     |
-//	+---------------------+---------------------+-----------------+
-//
-//	Merkle Data (1203b):
-//	+---------------------+--------------------+-----------------+
-//	| COMMON_HEADER (83b) | DATA HEADER (88b)  | PAYLOAD (1032b) |
-//	+---------------------+--------------------+-----------------+
-//	| [SIG, VARIANT, ...] | [FLAGS, SIZE, ...] | BINARY DATA     |
-//	+---------------------+--------------------+-----------------+
-//
-//	Legacy Coding (1228b):
-//	+---------------------+---------------------+--------------------+
-//	| COMMON_HEADER (83b) | CODING HEADER (89b) | PAYLOAD (1057b)    |
-//	+---------------------+---------------------+--------------------+
-//	| [SIG, VARIANT, ...] | [FLAGS, SIZE, ...]  | BIN + MERKLE PROOF |
-//	+---------------------+---------------------+--------------------+
-//
 // see solana/ledger/src/shred.rs
 const sizeOfCommonShredHeader = 83
 const sizeOfSignature = 64
@@ -62,45 +32,75 @@ const sizeOfMerkleDataShredPayload = sizeOfMerkleCodeShredPayload -
 	sizeOfMerkleCodeShredHeaders + sizeOfSignature
 
 const (
-	ShredVariantLegacyDataByte = 0b1010 << 4
-	ShredVariantLegacyCodeByte = 0b0101 << 4
-	ShredVariantMerkleDataByte = 0b1000 << 4
-	ShredVariantMerkleCodeByte = 0b0100 << 4
+	LegacyCode         byte = 0b0101 << 4
+	LegacyData         byte = 0b1010 << 4
+	MerkleCode         byte = 0b0100 << 4
+	MerkleCodeChained  byte = 0b0110 << 4
+	MerkleCodeResigned byte = 0b0111 << 4
+	MerkleData         byte = 0b1000 << 4
+	MerkleDataChained  byte = 0b1001 << 4
+	MerkleDataResigned byte = 0b1011 << 4
 )
 
-var shredVariantString = map[byte]string{
-	ShredVariantLegacyDataByte: "LegacyData",
-	ShredVariantLegacyCodeByte: "LegacyCode",
-	ShredVariantMerkleDataByte: "MerkleData",
-	ShredVariantMerkleCodeByte: "MerkleCode",
+const (
+	// A mask is a value used to enable, disable, or modify particular bits within another value.
+	// This is typically done using bitwise operations, such as AND, OR, and XOR.
+	// In our case, we're interested in isolating the first 2 bits of a byte and ignoring the last 6 bits.
+	// To achieve this, we use a mask with the first 2 bits set to 1 and the last 6 bits set to 0.
+	// This mask is represented as 0b11000000.
+	shredMask    = 0b11 << 6
+	shredCodeCmp = 0b01 << 6
+	shredDataCmp = 0b10 << 6
+)
+
+func (s *ShredVariantByte) IsCode() bool {
+	return (s.Variant & byte(shredMask)) == shredCodeCmp
 }
 
-// ShredVariant describes first 4 bits of shred_variant byte from shred ShredCommonHeader
-// we can only check first 4 bits because in Merkle shreds last 4 bits are used to
-// specify the number of merkle proof entries:
-// ledger/src/shred.rs
-//
-// LegacyCode 0b0101_1010
-// LegacyData 0b1010_0101
-// MerkleCode 0b0100_????
-// MerkleData 0b1000_????
-type ShredVariant byte
+func (s *ShredVariantByte) IsData() bool {
+	return (s.Variant & byte(shredMask)) == shredDataCmp
+}
 
-func (s ShredVariant) String() string {
-	str, ok := shredVariantString[byte(s)]
-	if !ok {
-		return ""
+func (s *ShredVariantByte) String() string {
+	return s.VariantString
+}
+
+// ShredVariantByte represents shred variant
+type ShredVariantByte struct {
+	Variant       byte
+	VariantString string
+	ProofSize     uint8
+	Chained       bool
+	Resigned      bool
+}
+
+// ParseShredVariant accepts a byte and returns a ShredVariantByte struct.
+func ParseShredVariant(b byte) (*ShredVariantByte, error) {
+	// extract the first 4 bits to identify the variant
+	variant := b & 0b11110000
+	// extract the last 4 bits to get the proof size
+	proofSize := b & 0b00001111
+
+	switch variant {
+	case LegacyCode:
+		return &ShredVariantByte{Variant: variant, VariantString: "LegacyCode"}, nil
+	case LegacyData:
+		return &ShredVariantByte{Variant: variant, VariantString: "LegacyData"}, nil
+	case MerkleCode:
+		return &ShredVariantByte{Variant: variant, VariantString: "MerkleCode", ProofSize: proofSize}, nil
+	case MerkleCodeChained:
+		return &ShredVariantByte{Variant: variant, VariantString: "MerkleCodeChained", ProofSize: proofSize, Chained: true}, nil
+	case MerkleCodeResigned:
+		return &ShredVariantByte{Variant: variant, VariantString: "MerkleCodeResigned", ProofSize: proofSize, Chained: true, Resigned: true}, nil
+	case MerkleData:
+		return &ShredVariantByte{Variant: variant, VariantString: "MerkleData", ProofSize: proofSize}, nil
+	case MerkleDataChained:
+		return &ShredVariantByte{Variant: variant, VariantString: "MerkleDataChained", ProofSize: proofSize, Chained: true}, nil
+	case MerkleDataResigned:
+		return &ShredVariantByte{Variant: variant, VariantString: "MerkleDataResigned", ProofSize: proofSize, Chained: true, Resigned: true}, nil
+	default:
+		return nil, fmt.Errorf("unknown shred variant: %08b", b)
 	}
-
-	return str
-}
-
-func (s ShredVariant) IsData() bool {
-	return s == ShredVariantLegacyDataByte || s == ShredVariantMerkleDataByte
-}
-
-func (s ShredVariant) IsCode() bool {
-	return s == ShredVariantLegacyCodeByte || s == ShredVariantMerkleCodeByte
 }
 
 type Shred struct {
@@ -108,7 +108,7 @@ type Shred struct {
 
 	DataSize  int
 	Signature string
-	Variant   ShredVariant
+	Variant   *ShredVariantByte
 	Slot      uint64
 	Index     uint32
 	FecSet    uint32
@@ -121,7 +121,7 @@ type Shred struct {
 // PartialShred has only information about shred type, slot and index, Raw is full shred
 type PartialShred struct {
 	Raw     []byte
-	Variant ShredVariant
+	Variant *ShredVariantByte
 	Slot    uint64
 	Index   uint32
 }
@@ -133,13 +133,10 @@ func ParseShred(s []byte) (*Shred, error) {
 
 	signatureBin := s[:sizeOfSignature]
 	signature := base64.StdEncoding.EncodeToString(signatureBin)
-
-	// A mask is a value used to enable, disable, or modify particular bits within another value.
-	// This is typically done using bitwise operations, such as AND, OR, and XOR.
-	// In our case, we're interested in isolating the first 4 bits of a byte and ignoring the last 4 bits.
-	// To achieve this, we use a mask with the first 4 bits set to 1 and the last 4 bits set to 0.
-	// This mask is represented as 0b11110000.
-	shredVariant := ShredVariant(s[sizeOfSignature : sizeOfSignature+sizeOfShredVariant][0] & 0b11110000)
+	shredVariant, err := ParseShredVariant(s[sizeOfSignature])
+	if err != nil {
+		return nil, fmt.Errorf("parse shred variant byte: %w", err)
+	}
 
 	var codingShredNumDataShreds uint16
 	var codingShredNumCodeShreds uint16
@@ -184,9 +181,14 @@ func ParseShredPartial(s []byte) (*PartialShred, error) {
 		return nil, err
 	}
 
+	shredVariant, err := ParseShredVariant(s[sizeOfSignature])
+	if err != nil {
+		return nil, err
+	}
+
 	return &PartialShred{
 		Raw:     s,
-		Variant: ShredVariant(s[sizeOfSignature : sizeOfSignature+sizeOfShredVariant][0] & 0b11110000),
+		Variant: shredVariant,
 		Slot: binary.LittleEndian.Uint64(
 			s[sizeOfSignature+sizeOfShredVariant : sizeOfSignature+sizeOfShredVariant+sizeOfShredSlot]),
 		Index: binary.LittleEndian.Uint32(
@@ -194,14 +196,14 @@ func ParseShredPartial(s []byte) (*PartialShred, error) {
 	}, nil
 }
 
-func ShredKey(slot uint64, index uint32, variant ShredVariant) string {
+func ShredKey(slot uint64, index uint32, variant *ShredVariantByte) string {
 	var builder strings.Builder
 	builder.WriteString(strconv.Itoa(int(slot)))
 	builder.WriteString(strconv.Itoa(int(index)))
 	// not calling variant.String() to avoid map access to improve conversion performance
-	// this will essentially write unique non-ascii string to keep the diff between different
+	// this will essentially write unique non-ascii char to keep the diff between different
 	// shred variants
-	builder.WriteString(string(variant))
+	builder.WriteString(string(variant.Variant))
 	return builder.String()
 }
 

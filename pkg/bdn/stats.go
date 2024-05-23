@@ -130,6 +130,10 @@ func (s *Stats) RecordUnseenShred(src *net.UDPAddr, shred *solana.PartialShred) 
 	s.firstShredRecorder.record(src, shred)
 }
 
+func (s *Stats) RecordNewGateway(peerIP string, version string, accountID string) {
+	s.fluentD.LogConnectedGateway(peerIP, version, accountID)
+}
+
 func nextZeroSecondWindow() time.Time {
 	t := time.Now()
 	secDiff := time.Second * time.Duration(59-t.Second())

@@ -11,9 +11,17 @@ import (
 const (
 	fluentDTSFmt = "2006-01-02T15:04:05.000000"
 
-	fluentDShredStatsRecordType = "SolanaBDNPerformance"
-	fluentDShredStatsLogName    = "stats.solana_bdn_performance"
+	fluentDShredStatsRecordType       = "SolanaBDNPerformance"
+	fluentDConnectedGatewayRecordType = "SolanaConnectedGateway"
+	fluentDShredStatsLogName          = "stats.solana_bdn_performance"
+	fluentDConnectedGatewayLogName    = "stats.solana_connected_gateway"
 )
+
+// Record represents a bloxroute style stat type record
+type Record struct {
+	Type string      `json:"type"`
+	Data interface{} `json:"data"`
+}
 
 type (
 	FluentDLogRecord struct {
@@ -29,6 +37,12 @@ type (
 		PeerIP       string `json:"peer_ip"`
 		TotalShreds  uint32 `json:"total_shreds"`
 		UnseenShreds uint32 `json:"unseen_shreds"`
+	}
+
+	fluentDConnectedGatewayStatsRecord struct {
+		PeerIP    string `json:"peer_ip"`
+		Version   string `json:"version"`
+		AccountId string `json:"account_id"`
 	}
 )
 
@@ -88,4 +102,21 @@ func (f *FluentD) LogShredStats(
 	}
 
 	f.log(record, time.Now(), fluentDShredStatsLogName)
+}
+
+func (f *FluentD) LogConnectedGateway(
+	peerIP string,
+	version string,
+	accountID string,
+) {
+	record := Record{
+		Type: fluentDConnectedGatewayRecordType,
+		Data: fluentDConnectedGatewayStatsRecord{
+			PeerIP:    peerIP,
+			Version:   version,
+			AccountId: accountID,
+		},
+	}
+
+	f.log(record, time.Now(), fluentDConnectedGatewayLogName)
 }
