@@ -5,6 +5,9 @@ import (
 	"time"
 )
 
+// InactivityTrigger calls the callback func if no messages received from ch
+// during duration dur. When message is received callback timer resets.
+// Exits when ctx is done.
 type InactivityTrigger struct {
 	ctx      context.Context
 	callback func()

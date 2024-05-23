@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"flag"
 	"fmt"
 	"log"
 	"net"
@@ -11,6 +10,7 @@ import (
 	"time"
 
 	"github.com/bloXroute-Labs/solana-gateway/bxgateway/internal/netlisten"
+	"github.com/urfave/cli/v2"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 
@@ -23,49 +23,94 @@ import (
 )
 
 const (
-	appName   = "solana-gateway"
-	version   = "0.2.0"
-	localhost = "127.0.0.1"
+	appName        = "solana-gateway"
+	defaultVersion = "0.2.0h"
+	localhost      = "127.0.0.1"
 
 	// environment variable to run gateway in passive mode
 	//
 	// "passive mode" means to be passive in relation to the solana-validator
 	// it only forwards [Solana -> BDN] traffic, but not [BDN -> Solana]
-	passiveModeEnv = "SG_MODE_PASSIVE"
+	passiveModeEnv    = "SG_MODE_PASSIVE"
+	gatewayVersionEnv = "SG_VERSION"
+)
+
+const (
+	logLevelFlag       = "log-level"
+	logFileLevelFlag   = "log-file-level"
+	logMaxSizeFlag     = "log-max-size"
+	logMaxBackupsFlag  = "log-max-backups"
+	logMaxAgeFlag      = "log-max-age"
+	solanaTVUPortFlag  = "tvu-port"
+	sniffInterfaceFlag = "network-interface"
+	bdnHostFlag        = "bdn-host"
+	bdnPortFlag        = "bdn-port"
+	bdnGRPCPortFlag    = "bdn-grpc-port"
+	udpServerPortFlag  = "port"
+	authHeaderFlag     = "auth-header"
 )
 
 func main() {
-	var (
-		logLevel      string
-		logFileLevel  string
-		logMaxSize    int
-		logMaxBackups int
-		logMaxAge     int
+	var app = cli.App{
+		Name: "solana-gateway",
+		Flags: []cli.Flag{
+			&cli.StringFlag{Name: logLevelFlag, Value: "info", Usage: "stdout log level"},
+			&cli.StringFlag{Name: logFileLevelFlag, Value: "debug", Usage: "logfile log level"},
+			&cli.IntFlag{Name: logMaxSizeFlag, Value: 100, Usage: "max logfile size MB"},
+			&cli.IntFlag{Name: logMaxBackupsFlag, Value: 10, Usage: "max logfile backups"},
+			&cli.IntFlag{Name: logMaxAgeFlag, Value: 10, Usage: "logfile max age"},
+			&cli.IntFlag{Name: solanaTVUPortFlag, Value: 8001, Usage: "Solana Validator TVU Port"},
+			&cli.StringFlag{Name: sniffInterfaceFlag, Required: true, Usage: "Outbound network interface"},
+			&cli.StringFlag{Name: bdnHostFlag, Required: true, Usage: "Closest bdn relay's host, see https://docs.bloxroute.com/solana/solana-bdn/startup-arguments"},
+			&cli.IntFlag{Name: bdnPortFlag, Value: 8888, Usage: "Closest bdn relay's UDP port"},
+			&cli.IntFlag{Name: bdnGRPCPortFlag, Value: 5005, Usage: "Closest bdn relay's GRPC port"},
+			&cli.IntFlag{Name: udpServerPortFlag, Value: 18888, Usage: "Localhost UDP port used to run a server for communication with bdn - should be open for inbound and outbound traffic"},
+			&cli.StringFlag{Name: authHeaderFlag, Required: true, Usage: "Auth header issued by bloXroute"},
+		},
+		Action: func(c *cli.Context) error {
+			run(
+				c.String(logLevelFlag),
+				c.String(logFileLevelFlag),
+				c.Int(logMaxSizeFlag),
+				c.Int(logMaxBackupsFlag),
+				c.Int(logMaxAgeFlag),
+				c.Int(solanaTVUPortFlag),
+				c.String(sniffInterfaceFlag),
+				c.String(bdnHostFlag),
+				c.Int(bdnPortFlag),
+				c.Int(bdnGRPCPortFlag),
+				c.Int(udpServerPortFlag),
+				c.String(authHeaderFlag),
+			)
 
-		solanaTVUPortArg  int
-		sniffInterfaceArg string
-		bdnHostArg        string
-		bdnPortArg        int
-		bdnGRPCPortArg    int
-		udpServerPortArg  int
-		authHeaderArg     string
-	)
+			return nil
+		},
+	}
 
-	flag.StringVar(&logLevel, "log-level", "info", "stdout log level")
-	flag.StringVar(&logFileLevel, "log-file-level", "debug", "logfile log level")
-	flag.IntVar(&logMaxSize, "log-max-size", 100, "max logfile size MB")
-	flag.IntVar(&logMaxBackups, "log-max-backups", 10, "max logfile backups")
-	flag.IntVar(&logMaxAge, "log-max-age", 10, "logfile max age")
+	err := app.Run(os.Args)
+	if err != nil {
+		log.Fatalln("run solana-gateway:", err)
+	}
+}
 
-	flag.IntVar(&solanaTVUPortArg, "tvu-port", 8001, "specifies Solana Validator TVU Port")
-	flag.StringVar(&sniffInterfaceArg, "network-interface", "", "outbound network interface")
-	flag.StringVar(&bdnHostArg, "bdn-host", "", "specifies host of closest relay of the bdn")
-	flag.IntVar(&bdnPortArg, "bdn-port", 8888, "specifies port of closest relay of the bdn")
-	flag.IntVar(&bdnGRPCPortArg, "bdn-grpc-port", 5001, "specifies grpc port of closest relay of the bdn")
-	flag.IntVar(&udpServerPortArg, "port", 18888, "UDP port used to run a server for communication with bdn - should be open for inbound and outbound traffic")
-	flag.StringVar(&authHeaderArg, "auth-header", "", "auth header issued by bloxroute")
-
-	flag.Parse()
+func run(
+	logLevel string,
+	logFileLevel string,
+	logMaxSize int,
+	logMaxBackups int,
+	logMaxAge int,
+	solanaTVUPort int,
+	sniffInterface string,
+	bdnHost string,
+	bdnPort int,
+	bdnGRPCPort int,
+	udpServerPort int,
+	authHeader string,
+) {
+	var version = os.Getenv(gatewayVersionEnv)
+	if version == "" {
+		version = defaultVersion
+	}
 
 	lg, err := logger.New(&logger.Config{
 		AppName:    appName,
@@ -74,22 +119,12 @@ func main() {
 		MaxSize:    logMaxSize,
 		MaxBackups: logMaxBackups,
 		MaxAge:     logMaxAge,
-		Port:       udpServerPortArg,
+		Port:       udpServerPort,
 		Version:    version,
 		Fluentd:    false,
 	})
 	if err != nil {
 		log.Fatalln("init service logger:", err)
-	}
-
-	if authHeaderArg == "" {
-		lg.Error("auth header is required")
-		lg.Exit(1)
-	}
-
-	if bdnHostArg == "" {
-		lg.Error("bdn host is required")
-		lg.Exit(1)
 	}
 
 	var (
@@ -99,7 +134,7 @@ func main() {
 
 	signal.Notify(sig, os.Interrupt)
 
-	server, err := udp.NewServer(udpServerPortArg)
+	server, err := udp.NewServer(udpServerPort)
 	if err != nil {
 		lg.Errorf("init udp server: %s", err)
 		lg.Exit(1)
@@ -114,13 +149,13 @@ func main() {
 		lg.Warn("gateway is running in passive mode (packets from BDN are not forwarded to validator)")
 	}
 
-	solanaAddr, err := net.ResolveUDPAddr("udp", fmt.Sprintf("%s:%d", localhost, solanaTVUPortArg))
+	solanaAddr, err := net.ResolveUDPAddr("udp", fmt.Sprintf("%s:%d", localhost, solanaTVUPort))
 	if err != nil {
 		lg.Errorf("resolve solana udp addr: %s", err)
 		lg.Exit(1)
 	}
 
-	bdnAddr, err := net.ResolveUDPAddr("udp", fmt.Sprintf("%s:%d", bdnHostArg, bdnPortArg))
+	bdnAddr, err := net.ResolveUDPAddr("udp", fmt.Sprintf("%s:%d", bdnHost, bdnPort))
 	if err != nil {
 		lg.Errorf("resolve solana udp addr: %s", err)
 		lg.Exit(1)
@@ -129,27 +164,21 @@ func main() {
 	var alterKeyCache = cache.NewAlterKey(time.Second * 5)
 	var stats = bdn.NewStats(lg, time.Minute)
 
-	nl, err := netlisten.NewNetworkListener(ctx, lg, alterKeyCache, stats, sniffInterfaceArg, []int{solanaTVUPortArg})
+	nl, err := netlisten.NewNetworkListener(ctx, lg, alterKeyCache, stats, sniffInterface, []int{solanaTVUPort})
 	if err != nil {
 		lg.Errorf("init network listener: %s", err)
 		lg.Exit(1)
 	}
 
-	conn, err := grpc.Dial(fmt.Sprintf("%s:%d", bdnHostArg, bdnGRPCPortArg), grpc.WithTransportCredentials(insecure.NewCredentials()))
+	conn, err := grpc.Dial(fmt.Sprintf("%s:%d", bdnHost, bdnGRPCPort), grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
 		lg.Errorf("grpc dial: %s", err)
 		lg.Exit(1)
 	}
-	client := pb.NewRelayClient(conn)
-	bdnRegister := func() error {
-		_, err := client.Register(context.Background(), &pb.RegisterRequest{
-			AuthHeader: authHeaderArg,
-		})
 
-		return err
-	}
+	registrar := gateway.NewBDNRegistrar(ctx, pb.NewRelayClient(conn), authHeader, version)
 
-	gateway.New(ctx, lg, alterKeyCache, server, solanaAddr, bdnAddr, stats, nl, bdnRegister, gwOpts...).Start()
+	gateway.New(ctx, lg, alterKeyCache, server, solanaAddr, bdnAddr, stats, nl, registrar, gwOpts...).Start()
 
 	<-sig
 	lg.Info("main: received interrupt signal")
