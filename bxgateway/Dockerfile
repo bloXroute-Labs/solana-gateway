@@ -1,6 +1,6 @@
 ARG SG_VERSION
 
-FROM --platform=linux/amd64 golang:1.21-alpine3.18 as builder
+FROM --platform=linux/amd64 golang:1.23-alpine as builder
 COPY .. /tmp/solana-bdn
 WORKDIR /tmp/solana-bdn/bxgateway
 RUN apk update && apk add libpcap-dev

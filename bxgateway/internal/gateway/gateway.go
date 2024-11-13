@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"runtime"
 	"sync"
@@ -28,7 +29,8 @@ type Gateway struct {
 	pool                         *sync.Pool
 	conn                         *net.UDPConn
 	solana                       *net.UDPAddr
-	bdn                          *net.UDPAddr
+	bdnUDPAddrMx                 *sync.RWMutex
+	bdnUDPAddr                   *net.UDPAddr
 	registrar                    Registrar
 	bdnRegisterInactivityTrigger *inactivitytrigger.InactivityTrigger
 
@@ -39,31 +41,48 @@ type Option func(*Gateway)
 
 func PassiveMode() Option { return func(g *Gateway) { g.passiveMode = true } }
 
-func New(ctx context.Context, lg logger.Logger, cache *cache.AlterKey, conn *net.UDPConn, solana, bdn *net.UDPAddr, stats *bdn.Stats, nl *netlisten.NetworkListener, registrar Registrar, opts ...Option) *Gateway {
-	gw := &Gateway{
-		ctx:         ctx,
-		lg:          lg,
-		cache:       cache,
-		stats:       stats,
-		nl:          nl,
-		pool:        &sync.Pool{New: func() interface{} { return make([]byte, udpShredSize) }},
-		conn:        conn,
-		solana:      solana,
-		bdn:         bdn,
-		passiveMode: false,
-		registrar:   registrar,
-		bdnRegisterInactivityTrigger: inactivitytrigger.NewInactivityTrigger(ctx, func() {
-			if err := registrar.Register(); err != nil {
-				lg.Errorf("retry register due to bdn inactivity failed: %s", err)
-			}
-		}, time.Minute),
+func New(ctx context.Context, lg logger.Logger, cache *cache.AlterKey, conn *net.UDPConn, solana *net.UDPAddr, bdnHost string, bdnUDPPort int, stats *bdn.Stats, nl *netlisten.NetworkListener, registrar Registrar, opts ...Option) (*Gateway, error) {
+	bdnUDPAddr, err := net.ResolveUDPAddr("udp", fmt.Sprintf("%s:%d", bdnHost, bdnUDPPort))
+	if err != nil {
+		return nil, fmt.Errorf("resolve BDN UDP address: %s", err)
 	}
+
+	gw := &Gateway{
+		ctx:    ctx,
+		lg:     lg,
+		cache:  cache,
+		stats:  stats,
+		nl:     nl,
+		pool:   &sync.Pool{New: func() interface{} { return make([]byte, udpShredSize) }},
+		conn:   conn,
+		solana: solana,
+
+		bdnUDPAddrMx: &sync.RWMutex{},
+		bdnUDPAddr:   bdnUDPAddr,
+		passiveMode:  false,
+		registrar:    registrar,
+	}
+
+	gw.bdnRegisterInactivityTrigger = inactivitytrigger.NewInactivityTrigger(ctx, func() {
+		if err := registrar.Register(); err != nil {
+			lg.Errorf("retry register due to bdn inactivity failed: %s", err)
+		}
+
+		bdnUDPAddr, err := net.ResolveUDPAddr("udp", fmt.Sprintf("%s:%d", bdnHost, bdnUDPPort))
+		if err != nil {
+			lg.Errorf("resolve BDN UDP address: %s", err)
+		}
+
+		gw.bdnUDPAddrMx.Lock()
+		gw.bdnUDPAddr = bdnUDPAddr
+		gw.bdnUDPAddrMx.Unlock()
+	}, time.Minute)
 
 	for _, o := range opts {
 		o(gw)
 	}
 
-	return gw
+	return gw, nil
 }
 
 func (g *Gateway) Start() {
@@ -163,7 +182,11 @@ func (g *Gateway) broadcastToSolana(ch <-chan []byte) {
 
 func (g *Gateway) broadcastToBDN(ch <-chan *solana.PartialShred) {
 	for shred := range ch {
-		if _, err := g.conn.WriteToUDP(shred.Raw, g.bdn); err != nil {
+		g.bdnUDPAddrMx.RLock()
+		_, err := g.conn.WriteToUDP(shred.Raw, g.bdnUDPAddr)
+		g.bdnUDPAddrMx.RUnlock()
+
+		if err != nil {
 			g.lg.Errorf("broadcastToBDN: write to UDP addr: %s: %s", err)
 		}
 	}

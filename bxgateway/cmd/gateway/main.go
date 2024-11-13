@@ -102,7 +102,7 @@ func run(
 	solanaTVUPort int,
 	sniffInterface string,
 	bdnHost string,
-	bdnPort int,
+	bdnUDPPort int,
 	bdnGRPCPort int,
 	udpServerPort int,
 	authHeader string,
@@ -112,7 +112,7 @@ func run(
 		version = defaultVersion
 	}
 
-	lg, err := logger.New(&logger.Config{
+	lg, closeLogger, err := logger.New(&logger.Config{
 		AppName:    appName,
 		Level:      logLevel,
 		FileLevel:  logFileLevel,
@@ -137,7 +137,7 @@ func run(
 	server, err := udp.NewServer(udpServerPort)
 	if err != nil {
 		lg.Errorf("init udp server: %s", err)
-		lg.Exit(1)
+		closeLogger()
 	}
 
 	gatewayModePassive := os.Getenv(passiveModeEnv) != ""
@@ -152,13 +152,7 @@ func run(
 	solanaAddr, err := net.ResolveUDPAddr("udp", fmt.Sprintf("%s:%d", localhost, solanaTVUPort))
 	if err != nil {
 		lg.Errorf("resolve solana udp addr: %s", err)
-		lg.Exit(1)
-	}
-
-	bdnAddr, err := net.ResolveUDPAddr("udp", fmt.Sprintf("%s:%d", bdnHost, bdnPort))
-	if err != nil {
-		lg.Errorf("resolve solana udp addr: %s", err)
-		lg.Exit(1)
+		closeLogger()
 	}
 
 	var alterKeyCache = cache.NewAlterKey(time.Second * 5)
@@ -167,18 +161,24 @@ func run(
 	nl, err := netlisten.NewNetworkListener(ctx, lg, alterKeyCache, stats, sniffInterface, []int{solanaTVUPort})
 	if err != nil {
 		lg.Errorf("init network listener: %s", err)
-		lg.Exit(1)
+		closeLogger()
 	}
 
 	conn, err := grpc.Dial(fmt.Sprintf("%s:%d", bdnHost, bdnGRPCPort), grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
 		lg.Errorf("grpc dial: %s", err)
-		lg.Exit(1)
+		closeLogger()
 	}
 
 	registrar := gateway.NewBDNRegistrar(ctx, pb.NewRelayClient(conn), authHeader, version)
 
-	gateway.New(ctx, lg, alterKeyCache, server, solanaAddr, bdnAddr, stats, nl, registrar, gwOpts...).Start()
+	gw, err := gateway.New(ctx, lg, alterKeyCache, server, solanaAddr, bdnHost, bdnUDPPort, stats, nl, registrar, gwOpts...)
+	if err != nil {
+		lg.Errorf("init gateway: %s", err)
+		closeLogger()
+	}
+
+	gw.Start()
 
 	<-sig
 	lg.Info("main: received interrupt signal")

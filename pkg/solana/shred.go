@@ -127,16 +127,21 @@ type PartialShred struct {
 }
 
 func ParseShred(s []byte) (*Shred, error) {
-	if err := validateShredSize(len(s)); err != nil {
+	if len(s) < sizeOfSignature {
+		return nil, fmt.Errorf("shred size too small: %d", len(s))
+	}
+
+	shredVariant, err := ParseShredVariant(s[sizeOfSignature])
+	if err != nil {
+		return nil, fmt.Errorf("parse shred variant byte: %w", err)
+	}
+
+	if err := validateShredSize(len(s), shredVariant); err != nil {
 		return nil, err
 	}
 
 	signatureBin := s[:sizeOfSignature]
 	signature := base64.StdEncoding.EncodeToString(signatureBin)
-	shredVariant, err := ParseShredVariant(s[sizeOfSignature])
-	if err != nil {
-		return nil, fmt.Errorf("parse shred variant byte: %w", err)
-	}
 
 	var codingShredNumDataShreds uint16
 	var codingShredNumCodeShreds uint16
@@ -177,12 +182,16 @@ func ParseShred(s []byte) (*Shred, error) {
 }
 
 func ParseShredPartial(s []byte) (*PartialShred, error) {
-	if err := validateShredSize(len(s)); err != nil {
-		return nil, err
+	if len(s) < sizeOfSignature {
+		return nil, fmt.Errorf("shred size too small: %d", len(s))
 	}
 
 	shredVariant, err := ParseShredVariant(s[sizeOfSignature])
 	if err != nil {
+		return nil, err
+	}
+
+	if err := validateShredSize(len(s), shredVariant); err != nil {
 		return nil, err
 	}
 
@@ -207,10 +216,18 @@ func ShredKey(slot uint64, index uint32, variant *ShredVariantByte) string {
 	return builder.String()
 }
 
-func validateShredSize(sz int) error {
-	if sz != sizeOfLegacyCodeShredPayload && sz != sizeOfMerkleDataShredPayload {
-		return fmt.Errorf("illegal shred size, expected: %d for legacy data/code & merkle code shreds or %d for merkle data shred, got: %d",
-			sizeOfLegacyCodeShredPayload, sizeOfMerkleDataShredPayload, sz)
+func validateShredSize(sz int, shredVariant *ShredVariantByte) error {
+	switch shredVariant.Variant {
+	case LegacyCode, LegacyData:
+		if sz != sizeOfLegacyCodeShredPayload {
+			return fmt.Errorf("illegal shred size, expected: %d for legacy data/code, got: %d", sizeOfLegacyCodeShredPayload, sz)
+		}
+	case MerkleCode, MerkleData, MerkleDataChained, MerkleDataResigned, MerkleCodeResigned, MerkleCodeChained:
+		if sz < sizeOfMerkleDataShredPayload || sz > sizeOfLegacyCodeShredPayload {
+			return fmt.Errorf("illegal shred size, expected between %d to %d for merkle data/code, got: %d", sizeOfMerkleDataShredPayload, sizeOfLegacyCodeShredPayload, sz)
+		}
+	default:
+		return fmt.Errorf("unknown shred variant: %d", shredVariant.Variant)
 	}
 
 	return nil
