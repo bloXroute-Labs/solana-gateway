@@ -12,6 +12,62 @@ import (
 	"github.com/bloXroute-Labs/solana-gateway/pkg/solana"
 )
 
+type KeyedCounter[T comparable] struct {
+	counter map[T]uint64
+	mx      sync.Mutex
+}
+
+// NewKeyedCounterWithRunner same as NewKeyedCounter but with built-in RunPrettyPrint
+func NewKeyedCounterWithRunner[T comparable](l logger.Logger, delay time.Duration, label string) *KeyedCounter[T] {
+	counter := NewKeyedCounter[T]()
+	go counter.RunPrettyPrint(l, delay, label)
+	return counter
+}
+
+func NewKeyedCounter[T comparable]() *KeyedCounter[T] {
+	return &KeyedCounter[T]{
+		counter: make(map[T]uint64),
+		mx:      sync.Mutex{},
+	}
+}
+
+func (m *KeyedCounter[T]) Increment(key T) {
+	m.mx.Lock()
+	defer m.mx.Unlock()
+	m.counter[key] += 1
+}
+
+func (m *KeyedCounter[T]) Flush() map[T]uint64 {
+	m.mx.Lock()
+	defer m.mx.Unlock()
+	ret := m.counter
+	m.counter = make(map[T]uint64)
+	return ret
+}
+
+func (m *KeyedCounter[T]) FlushPretty() string {
+	mp := m.Flush()
+
+	statsStr := make([]string, 0)
+	for k, counter := range mp {
+		// note: these are not sorted
+		statsStr = append(statsStr, fmt.Sprintf("(%v, %d)", k, counter))
+	}
+
+	return fmt.Sprintf("[%s]", strings.Join(statsStr, ", "))
+}
+
+func (m *KeyedCounter[T]) RunPrettyPrint(l logger.Logger, label time.Duration, prefix string) {
+	nextLogTime := time.Now().Truncate(label).Add(label)
+	time.Sleep(time.Until(nextLogTime))
+
+	for {
+		l.Infof("stats: %s: %s", prefix, m.FlushPretty())
+		nextLogTime = nextLogTime.Add(label)
+		time.Sleep(time.Until(nextLogTime))
+	}
+}
+
 const shredsRecorderChanBuf = 1e4
 
 type Stats struct {

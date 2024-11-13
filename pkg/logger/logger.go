@@ -38,7 +38,7 @@ func DefaultConfig() *Config {
 //
 // https://peter.bourgon.org/go-best-practices-2016/#top-tip-9
 // https://dave.cheney.net/2017/01/26/context-is-for-cancelation
-func New(cfg *Config) (Logger, error) {
+func New(cfg *Config) (Logger, func(), error) {
 	consoleLevel, err := log.ParseLevel(cfg.Level)
 	if err != nil {
 		log.Fatal("invalid log level: ", err)
@@ -57,7 +57,7 @@ func New(cfg *Config) (Logger, error) {
 		}
 	}
 
-	err = log.Init(&log.Config{
+	closeLogger, err := log.Init(&log.Config{
 		AppName:      cfg.AppName,
 		FileName:     fmt.Sprintf("logs/%v-%v.log", cfg.AppName, cfg.Port),
 		FileLevel:    fileLevel,
@@ -68,10 +68,10 @@ func New(cfg *Config) (Logger, error) {
 	}, fluentDConfig, cfg.Version)
 
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
-	return &logrusLogger{}, nil
+	return &logrusLogger{}, closeLogger, nil
 }
 
 type Logger interface {
@@ -85,7 +85,6 @@ type Logger interface {
 	Warnf(string, ...interface{})
 	Error(string)
 	Errorf(string, ...interface{})
-	Exit(int)
 }
 
 type logrusLogger struct{}
@@ -100,4 +99,3 @@ func (l *logrusLogger) Warn(s string)                     { log.Warnf(s) }
 func (l *logrusLogger) Warnf(s string, a ...interface{})  { log.Warnf(s, a...) }
 func (l *logrusLogger) Error(s string)                    { log.Error(s) }
 func (l *logrusLogger) Errorf(s string, a ...interface{}) { log.Errorf(s, a...) }
-func (l *logrusLogger) Exit(ec int)                       { log.Exit(ec) }
