@@ -2,7 +2,6 @@ package gateway
 
 import (
 	"context"
-	"fmt"
 	"net"
 	"runtime"
 	"sync"
@@ -41,12 +40,7 @@ type Option func(*Gateway)
 
 func PassiveMode() Option { return func(g *Gateway) { g.passiveMode = true } }
 
-func New(ctx context.Context, lg logger.Logger, cache *cache.AlterKey, conn *net.UDPConn, solana *net.UDPAddr, bdnHost string, bdnUDPPort int, stats *bdn.Stats, nl *netlisten.NetworkListener, registrar Registrar, opts ...Option) (*Gateway, error) {
-	bdnUDPAddr, err := net.ResolveUDPAddr("udp", fmt.Sprintf("%s:%d", bdnHost, bdnUDPPort))
-	if err != nil {
-		return nil, fmt.Errorf("resolve BDN UDP address: %s", err)
-	}
-
+func New(ctx context.Context, lg logger.Logger, cache *cache.AlterKey, conn *net.UDPConn, solana *net.UDPAddr, stats *bdn.Stats, nl *netlisten.NetworkListener, registrar Registrar, opts ...Option) (*Gateway, error) {
 	gw := &Gateway{
 		ctx:    ctx,
 		lg:     lg,
@@ -58,17 +52,18 @@ func New(ctx context.Context, lg logger.Logger, cache *cache.AlterKey, conn *net
 		solana: solana,
 
 		bdnUDPAddrMx: &sync.RWMutex{},
-		bdnUDPAddr:   bdnUDPAddr,
+		bdnUDPAddr:   nil,
 		passiveMode:  false,
 		registrar:    registrar,
 	}
 
 	gw.bdnRegisterInactivityTrigger = inactivitytrigger.NewInactivityTrigger(ctx, func() {
-		if err := registrar.Register(); err != nil {
-			lg.Errorf("retry register due to bdn inactivity failed: %s", err)
+		udpAddr, err := registrar.Register()
+		if err != nil {
+			lg.Errorf("failed to register gateway after inactivity trigger, reason: %s", err)
 		}
 
-		bdnUDPAddr, err := net.ResolveUDPAddr("udp", fmt.Sprintf("%s:%d", bdnHost, bdnUDPPort))
+		bdnUDPAddr, err := net.ResolveUDPAddr("udp", udpAddr)
 		if err != nil {
 			lg.Errorf("resolve BDN UDP address: %s", err)
 		}
@@ -76,6 +71,8 @@ func New(ctx context.Context, lg logger.Logger, cache *cache.AlterKey, conn *net
 		gw.bdnUDPAddrMx.Lock()
 		gw.bdnUDPAddr = bdnUDPAddr
 		gw.bdnUDPAddrMx.Unlock()
+
+		lg.Infof("gateway successfully re-registered, udp addr: %s", bdnUDPAddr.String())
 	}, time.Minute)
 
 	for _, o := range opts {
@@ -91,12 +88,24 @@ func (g *Gateway) Start() {
 		sol2bdnCh = make(chan *solana.PartialShred, 1e5)
 	)
 
-	if err := g.registrar.Register(); err != nil {
-		// This is fine until we update relays
-		g.lg.Warnf("failed register to bdn during start: %s", err)
+	udpAddr, err := g.registrar.Register()
+	if err != nil {
+		g.lg.Errorf("register gateway on startup: %s", err)
+		return
 	}
 
+	bdnUDPAddr, err := net.ResolveUDPAddr("udp", udpAddr)
+	if err != nil {
+		g.lg.Errorf("resolve BDN UDP address on startup: %s", err)
+	}
+
+	g.bdnUDPAddrMx.Lock()
+	g.bdnUDPAddr = bdnUDPAddr
+	g.bdnUDPAddrMx.Unlock()
+
 	g.bdnRegisterInactivityTrigger.Start()
+
+	g.lg.Infof("gateway successfully registered, udp addr: %s", bdnUDPAddr.String())
 
 	for i := 0; i < runtime.NumCPU(); i++ {
 		go g.receiveShredsFromBDN(bdn2solCh)
@@ -183,6 +192,10 @@ func (g *Gateway) broadcastToSolana(ch <-chan []byte) {
 func (g *Gateway) broadcastToBDN(ch <-chan *solana.PartialShred) {
 	for shred := range ch {
 		g.bdnUDPAddrMx.RLock()
+		if g.bdnUDPAddr == nil { // wait until registration is done, otherwise the udp address is nil which leads to panic
+			g.bdnUDPAddrMx.RUnlock()
+			continue
+		}
 		_, err := g.conn.WriteToUDP(shred.Raw, g.bdnUDPAddr)
 		g.bdnUDPAddrMx.RUnlock()
 

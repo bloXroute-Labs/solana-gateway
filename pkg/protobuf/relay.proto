@@ -1,15 +1,17 @@
 syntax = "proto3";
 
-import "google/protobuf/empty.proto";
-
 package relay;
 option go_package = "github.com/bloXroute-Labs/solana-gateway/pkg/protobuf";
 
 service Relay {
-    rpc Register(RegisterRequest) returns (google.protobuf.Empty);
+    rpc Register(RegisterRequest) returns (RegisterResponse);
 }
 
 message RegisterRequest {
     string auth_header = 1;
     string version = 2;
+}
+
+message RegisterResponse {
+    string udp_address = 1;
 }

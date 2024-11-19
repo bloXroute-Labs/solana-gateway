@@ -3,7 +3,7 @@ module github.com/bloXroute-Labs/solana-gateway/pkg
 go 1.23
 
 require (
-	github.com/bloXroute-Labs/gateway/v2 v2.129.43
+	github.com/bloXroute-Labs/gateway/v2 v2.129.47
 	github.com/fluent/fluent-logger-golang v1.9.0
 	github.com/gagliardetto/solana-go v1.11.0
 	github.com/google/gopacket v1.1.19
@@ -11,6 +11,8 @@ require (
 	google.golang.org/grpc v1.68.0
 	google.golang.org/protobuf v1.35.1
 )
+
+// replace github.com/prysmaticlabs/prysm/v5 => github.com/prysmaticlabs/prysm/v5 v5.0.3
 
 require (
 	filippo.io/edwards25519 v1.0.0-rc.1 // indirect
@@ -33,7 +35,7 @@ require (
 	github.com/modern-go/reflect2 v1.0.2 // indirect
 	github.com/mostynb/zstdpool-freelist v0.0.0-20201229113212-927304c0c3b1 // indirect
 	github.com/mr-tron/base58 v1.2.0 // indirect
-	github.com/onsi/gomega v1.34.1 // indirect
+	github.com/onsi/gomega v1.30.0 // indirect
 	github.com/philhofer/fwd v1.1.3-0.20240916144458-20a13a1f6b7c // indirect
 	github.com/rogpeppe/go-internal v1.12.0 // indirect
 	github.com/rs/zerolog v1.33.0 // indirect
@@ -44,7 +46,6 @@ require (
 	go.uber.org/ratelimit v0.2.0 // indirect
 	go.uber.org/zap v1.27.0 // indirect
 	golang.org/x/crypto v0.29.0 // indirect
-	golang.org/x/exp v0.0.0-20240808152545-0cdaa3abc0fa // indirect
 	golang.org/x/net v0.31.0 // indirect
 	golang.org/x/sys v0.27.0 // indirect
 	golang.org/x/term v0.26.0 // indirect
