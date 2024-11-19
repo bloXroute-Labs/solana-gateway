@@ -62,7 +62,7 @@ func main() {
 			&cli.IntFlag{Name: solanaTVUPortFlag, Value: 8001, Usage: "Solana Validator TVU Port"},
 			&cli.StringFlag{Name: sniffInterfaceFlag, Required: true, Usage: "Outbound network interface"},
 			&cli.StringFlag{Name: bdnHostFlag, Required: true, Usage: "Closest bdn relay's host, see https://docs.bloxroute.com/solana/solana-bdn/startup-arguments"},
-			&cli.IntFlag{Name: bdnPortFlag, Value: 8888, Usage: "Closest bdn relay's UDP port"},
+			&cli.IntFlag{Name: bdnPortFlag, Value: 8888, Usage: "DEPRECATED - kept to not to crash existing configurations"},
 			&cli.IntFlag{Name: bdnGRPCPortFlag, Value: 5005, Usage: "Closest bdn relay's GRPC port"},
 			&cli.IntFlag{Name: udpServerPortFlag, Value: 18888, Usage: "Localhost UDP port used to run a server for communication with bdn - should be open for inbound and outbound traffic"},
 			&cli.StringFlag{Name: authHeaderFlag, Required: true, Usage: "Auth header issued by bloXroute"},
@@ -77,7 +77,6 @@ func main() {
 				c.Int(solanaTVUPortFlag),
 				c.String(sniffInterfaceFlag),
 				c.String(bdnHostFlag),
-				c.Int(bdnPortFlag),
 				c.Int(bdnGRPCPortFlag),
 				c.Int(udpServerPortFlag),
 				c.String(authHeaderFlag),
@@ -102,7 +101,6 @@ func run(
 	solanaTVUPort int,
 	sniffInterface string,
 	bdnHost string,
-	bdnUDPPort int,
 	bdnGRPCPort int,
 	udpServerPort int,
 	authHeader string,
@@ -172,7 +170,7 @@ func run(
 
 	registrar := gateway.NewBDNRegistrar(ctx, pb.NewRelayClient(conn), authHeader, version)
 
-	gw, err := gateway.New(ctx, lg, alterKeyCache, server, solanaAddr, bdnHost, bdnUDPPort, stats, nl, registrar, gwOpts...)
+	gw, err := gateway.New(ctx, lg, alterKeyCache, server, solanaAddr, stats, nl, registrar, gwOpts...)
 	if err != nil {
 		lg.Errorf("init gateway: %s", err)
 		closeLogger()
