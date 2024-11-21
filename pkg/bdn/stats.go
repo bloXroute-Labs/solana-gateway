@@ -135,8 +135,8 @@ func NewStats(lg logger.Logger, timeout time.Duration, opts ...StatsOption) *Sta
 				totalShreds := st.totalShredsRecorder.flush()
 				unseenShreds := st.unseenShredsRecorder.flush()
 
-				st.lg.Infof("stats: total shreds by source: %s unseen shreds by source: %s",
-					totalShreds.String(), unseenShreds.String())
+				st.lg.Infof("stats: total shreds by source: %s unseen shreds by source: %s. %s",
+					totalShreds.String(), unseenShreds.String(), unseenShreds.FirstSeenFromBDN())
 
 				st.firstShredRecorder.clean()
 
@@ -313,4 +313,23 @@ func (s *shredsBySource) String() string {
 	}
 
 	return fmt.Sprintf("[%s]", strings.Join(statsStr, ", "))
+}
+
+func (s *shredsBySource) FirstSeenFromBDN() string {
+	var totalShreds, totalShredsSeenFromBdn int
+	for _, st := range s.stats {
+		_, port, err := net.SplitHostPort(st.src)
+		if err != nil {
+			fmt.Printf("Error parsing address %v: %v (calculaiton for first seen from bdn will not include this src)", st.src, err)
+			continue
+		}
+		totalShreds += st.shreds
+		if port != "0" {
+			totalShredsSeenFromBdn += st.shreds
+		}
+	}
+	if totalShreds == 0 {
+		return "No shred records found"
+	}
+	return fmt.Sprintf("Seen %.2f%% of shreds first from BDN", (float64(totalShredsSeenFromBdn)/float64(totalShreds))*100)
 }
