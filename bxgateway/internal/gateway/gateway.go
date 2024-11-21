@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"runtime"
 	"sync"
@@ -32,6 +33,8 @@ type Gateway struct {
 	bdnUDPAddr                   *net.UDPAddr
 	registrar                    Registrar
 	bdnRegisterInactivityTrigger *inactivitytrigger.InactivityTrigger
+	addressesToSendShreds        []*net.UDPAddr
+	broadcastFromBdnOnly         bool
 
 	passiveMode bool
 }
@@ -40,7 +43,26 @@ type Option func(*Gateway)
 
 func PassiveMode() Option { return func(g *Gateway) { g.passiveMode = true } }
 
-func New(ctx context.Context, lg logger.Logger, cache *cache.AlterKey, conn *net.UDPConn, solana *net.UDPAddr, stats *bdn.Stats, nl *netlisten.NetworkListener, registrar Registrar, opts ...Option) (*Gateway, error) {
+func parseCmdAddresses(addresses []string) []*net.UDPAddr {
+	var addressesList []*net.UDPAddr
+	if len(addresses) == 0 {
+		return addressesList
+	}
+	for _, address := range addresses {
+		if address == "" {
+			panic(fmt.Errorf("argument to --broadcast-addresses is empty or has an extra comma"))
+		}
+		udpAddr, err := net.ResolveUDPAddr("udp", address)
+		if err != nil {
+			panic(fmt.Sprintf("failed to resolve address %v: %v", address, err))
+		}
+		addressesList = append(addressesList, udpAddr)
+	}
+	return addressesList
+}
+
+func New(ctx context.Context, lg logger.Logger, cache *cache.AlterKey, conn *net.UDPConn, solana *net.UDPAddr, stats *bdn.Stats, nl *netlisten.NetworkListener,
+	registrar Registrar, addressesToSendShreds []string, broadcastFromBdnOnly bool, opts ...Option) (*Gateway, error) {
 	gw := &Gateway{
 		ctx:    ctx,
 		lg:     lg,
@@ -51,10 +73,12 @@ func New(ctx context.Context, lg logger.Logger, cache *cache.AlterKey, conn *net
 		conn:   conn,
 		solana: solana,
 
-		bdnUDPAddrMx: &sync.RWMutex{},
-		bdnUDPAddr:   nil,
-		passiveMode:  false,
-		registrar:    registrar,
+		bdnUDPAddrMx:          &sync.RWMutex{},
+		bdnUDPAddr:            nil,
+		passiveMode:           false,
+		registrar:             registrar,
+		addressesToSendShreds: parseCmdAddresses(addressesToSendShreds),
+		broadcastFromBdnOnly:  broadcastFromBdnOnly,
 	}
 
 	gw.bdnRegisterInactivityTrigger = inactivitytrigger.NewInactivityTrigger(ctx, func() {
@@ -137,6 +161,11 @@ func (g *Gateway) receiveShredsFromBDN(broadcastCh chan []byte) {
 			continue
 		}
 
+		if !addr.IP.Equal(g.bdnUDPAddr.IP) {
+			g.pool.Put(buf)
+			continue
+		}
+
 		g.bdnRegisterInactivityTrigger.Notify()
 
 		shred, err := solana.ParseShredPartial(buf)
@@ -184,6 +213,9 @@ func (g *Gateway) broadcastToSolana(ch <-chan []byte) {
 		if _, err := g.conn.WriteToUDP(buf, g.solana); err != nil {
 			g.lg.Errorf("broadcastToSolana: write to UDP: %s", err)
 		}
+		for _, addr := range g.addressesToSendShreds {
+			_, _ = g.conn.WriteToUDP(buf, addr)
+		}
 
 		g.pool.Put(buf)
 	}
@@ -198,6 +230,12 @@ func (g *Gateway) broadcastToBDN(ch <-chan *solana.PartialShred) {
 		}
 		_, err := g.conn.WriteToUDP(shred.Raw, g.bdnUDPAddr)
 		g.bdnUDPAddrMx.RUnlock()
+
+		if !g.broadcastFromBdnOnly {
+			for _, addr := range g.addressesToSendShreds {
+				_, _ = g.conn.WriteToUDP(shred.Raw, addr)
+			}
+		}
 
 		if err != nil {
 			g.lg.Errorf("broadcastToBDN: write to UDP addr: %s: %s", err)

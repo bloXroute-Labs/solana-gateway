@@ -36,18 +36,20 @@ const (
 )
 
 const (
-	logLevelFlag       = "log-level"
-	logFileLevelFlag   = "log-file-level"
-	logMaxSizeFlag     = "log-max-size"
-	logMaxBackupsFlag  = "log-max-backups"
-	logMaxAgeFlag      = "log-max-age"
-	solanaTVUPortFlag  = "tvu-port"
-	sniffInterfaceFlag = "network-interface"
-	bdnHostFlag        = "bdn-host"
-	bdnPortFlag        = "bdn-port"
-	bdnGRPCPortFlag    = "bdn-grpc-port"
-	udpServerPortFlag  = "port"
-	authHeaderFlag     = "auth-header"
+	logLevelFlag         = "log-level"
+	logFileLevelFlag     = "log-file-level"
+	logMaxSizeFlag       = "log-max-size"
+	logMaxBackupsFlag    = "log-max-backups"
+	logMaxAgeFlag        = "log-max-age"
+	solanaTVUPortFlag    = "tvu-port"
+	sniffInterfaceFlag   = "network-interface"
+	bdnHostFlag          = "bdn-host"
+	bdnPortFlag          = "bdn-port"
+	bdnGRPCPortFlag      = "bdn-grpc-port"
+	udpServerPortFlag    = "port"
+	authHeaderFlag       = "auth-header"
+	broadcastAddresses   = "broadcast-addresses"
+	broadcastFromBdnOnly = "broadcast-from-bdn-only"
 )
 
 func main() {
@@ -66,6 +68,8 @@ func main() {
 			&cli.IntFlag{Name: bdnGRPCPortFlag, Value: 5005, Usage: "Closest bdn relay's GRPC port"},
 			&cli.IntFlag{Name: udpServerPortFlag, Value: 18888, Usage: "Localhost UDP port used to run a server for communication with bdn - should be open for inbound and outbound traffic"},
 			&cli.StringFlag{Name: authHeaderFlag, Required: true, Usage: "Auth header issued by bloXroute"},
+			&cli.StringSliceFlag{Name: broadcastAddresses, Usage: "addresses of list ip:port separate by comma to send shreds to"},
+			&cli.BoolFlag{Name: broadcastFromBdnOnly, Value: false, Usage: "broadcast from bdn only"},
 		},
 		Action: func(c *cli.Context) error {
 			run(
@@ -80,6 +84,8 @@ func main() {
 				c.Int(bdnGRPCPortFlag),
 				c.Int(udpServerPortFlag),
 				c.String(authHeaderFlag),
+				c.StringSlice(broadcastAddresses),
+				c.Bool(broadcastFromBdnOnly),
 			)
 
 			return nil
@@ -104,6 +110,8 @@ func run(
 	bdnGRPCPort int,
 	udpServerPort int,
 	authHeader string,
+	addressesToSendShreds []string,
+	broadcastFromBdnOnly bool,
 ) {
 	var version = os.Getenv(gatewayVersionEnv)
 	if version == "" {
@@ -170,7 +178,7 @@ func run(
 
 	registrar := gateway.NewBDNRegistrar(ctx, pb.NewRelayClient(conn), authHeader, version)
 
-	gw, err := gateway.New(ctx, lg, alterKeyCache, server, solanaAddr, stats, nl, registrar, gwOpts...)
+	gw, err := gateway.New(ctx, lg, alterKeyCache, server, solanaAddr, stats, nl, registrar, addressesToSendShreds, broadcastFromBdnOnly, gwOpts...)
 	if err != nil {
 		lg.Errorf("init gateway: %s", err)
 		closeLogger()
