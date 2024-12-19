@@ -40,6 +40,7 @@ const (
 	MerkleData         byte = 0b1000 << 4
 	MerkleDataChained  byte = 0b1001 << 4
 	MerkleDataResigned byte = 0b1011 << 4
+	AliveMsg                = "alive"
 )
 
 const (
