@@ -50,6 +50,7 @@ const (
 	authHeaderFlag       = "auth-header"
 	broadcastAddresses   = "broadcast-addresses"
 	broadcastFromBdnOnly = "broadcast-from-bdn-only"
+	noValidator          = "no-validator"
 )
 
 func main() {
@@ -62,7 +63,7 @@ func main() {
 			&cli.IntFlag{Name: logMaxBackupsFlag, Value: 10, Usage: "max logfile backups"},
 			&cli.IntFlag{Name: logMaxAgeFlag, Value: 10, Usage: "logfile max age"},
 			&cli.IntFlag{Name: solanaTVUPortFlag, Value: 8001, Usage: "Solana Validator TVU Port"},
-			&cli.StringFlag{Name: sniffInterfaceFlag, Required: true, Usage: "Outbound network interface"},
+			&cli.StringFlag{Name: sniffInterfaceFlag, Usage: "Outbound network interface"},
 			&cli.StringFlag{Name: bdnHostFlag, Required: true, Usage: "Closest bdn relay's host, see https://docs.bloxroute.com/solana/solana-bdn/startup-arguments"},
 			&cli.IntFlag{Name: bdnPortFlag, Value: 8888, Usage: "DEPRECATED - kept to not to crash existing configurations"},
 			&cli.IntFlag{Name: bdnGRPCPortFlag, Value: 5005, Usage: "Closest bdn relay's GRPC port"},
@@ -70,6 +71,7 @@ func main() {
 			&cli.StringFlag{Name: authHeaderFlag, Required: true, Usage: "Auth header issued by bloXroute"},
 			&cli.StringSliceFlag{Name: broadcastAddresses, Usage: "addresses of list ip:port separate by comma to send shreds to"},
 			&cli.BoolFlag{Name: broadcastFromBdnOnly, Value: false, Usage: "broadcast from bdn only"},
+			&cli.BoolFlag{Name: noValidator, Value: false, Usage: "run gw without node, only for elite/ultra accounts"},
 		},
 		Action: func(c *cli.Context) error {
 			run(
@@ -86,6 +88,7 @@ func main() {
 				c.String(authHeaderFlag),
 				c.StringSlice(broadcastAddresses),
 				c.Bool(broadcastFromBdnOnly),
+				c.Bool(noValidator),
 			)
 
 			return nil
@@ -112,7 +115,11 @@ func run(
 	authHeader string,
 	addressesToSendShreds []string,
 	broadcastFromBdnOnly bool,
+	noValidator bool,
 ) {
+	if !noValidator && sniffInterface == "" {
+		log.Fatalln("network-interface can't be empty")
+	}
 	var version = os.Getenv(gatewayVersionEnv)
 	if version == "" {
 		version = defaultVersion
@@ -164,10 +171,14 @@ func run(
 	var alterKeyCache = cache.NewAlterKey(time.Second * 5)
 	var stats = bdn.NewStats(lg, time.Minute)
 
-	nl, err := netlisten.NewNetworkListener(ctx, lg, alterKeyCache, stats, sniffInterface, []int{solanaTVUPort})
-	if err != nil {
-		lg.Errorf("init network listener: %s", err)
-		closeLogger()
+	var nl *netlisten.NetworkListener
+	// assign net listener only when running with validator
+	if !noValidator {
+		nl, err = netlisten.NewNetworkListener(ctx, lg, alterKeyCache, stats, sniffInterface, []int{solanaTVUPort})
+		if err != nil {
+			lg.Errorf("init network listener: %s", err)
+			closeLogger()
+		}
 	}
 
 	conn, err := grpc.Dial(fmt.Sprintf("%s:%d", bdnHost, bdnGRPCPort), grpc.WithTransportCredentials(insecure.NewCredentials()))
@@ -178,7 +189,7 @@ func run(
 
 	registrar := gateway.NewBDNRegistrar(ctx, pb.NewRelayClient(conn), authHeader, version)
 
-	gw, err := gateway.New(ctx, lg, alterKeyCache, server, solanaAddr, stats, nl, registrar, addressesToSendShreds, broadcastFromBdnOnly, gwOpts...)
+	gw, err := gateway.New(ctx, lg, alterKeyCache, server, solanaAddr, stats, nl, registrar, addressesToSendShreds, broadcastFromBdnOnly, noValidator, gwOpts...)
 	if err != nil {
 		lg.Errorf("init gateway: %s", err)
 		closeLogger()

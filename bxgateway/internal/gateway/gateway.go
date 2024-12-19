@@ -17,7 +17,8 @@ import (
 )
 
 const (
-	udpShredSize = 1228
+	udpShredSize     = 1228
+	aliveMsgInterval = 10 * time.Second
 )
 
 type Gateway struct {
@@ -35,6 +36,7 @@ type Gateway struct {
 	bdnRegisterInactivityTrigger *inactivitytrigger.InactivityTrigger
 	addressesToSendShreds        []*net.UDPAddr
 	broadcastFromBdnOnly         bool
+	noValidator                  bool
 
 	passiveMode bool
 }
@@ -62,7 +64,7 @@ func parseCmdAddresses(addresses []string) []*net.UDPAddr {
 }
 
 func New(ctx context.Context, lg logger.Logger, cache *cache.AlterKey, conn *net.UDPConn, solana *net.UDPAddr, stats *bdn.Stats, nl *netlisten.NetworkListener,
-	registrar Registrar, addressesToSendShreds []string, broadcastFromBdnOnly bool, opts ...Option) (*Gateway, error) {
+	registrar Registrar, addressesToSendShreds []string, broadcastFromBdnOnly bool, noValidator bool, opts ...Option) (*Gateway, error) {
 	gw := &Gateway{
 		ctx:    ctx,
 		lg:     lg,
@@ -79,6 +81,7 @@ func New(ctx context.Context, lg logger.Logger, cache *cache.AlterKey, conn *net
 		registrar:             registrar,
 		addressesToSendShreds: parseCmdAddresses(addressesToSendShreds),
 		broadcastFromBdnOnly:  broadcastFromBdnOnly,
+		noValidator:           noValidator,
 	}
 
 	gw.bdnRegisterInactivityTrigger = inactivitytrigger.NewInactivityTrigger(ctx, func() {
@@ -137,10 +140,29 @@ func (g *Gateway) Start() {
 
 	for i := 0; i < runtime.NumCPU()/2; i++ {
 		go g.broadcastToSolana(bdn2solCh)
-		go g.broadcastToBDN(sol2bdnCh)
+		if !g.noValidator {
+			go g.broadcastToBDN(sol2bdnCh)
+		}
 	}
 
-	go g.nl.Recv(sol2bdnCh)
+	if g.noValidator {
+		go g.sendAliveMessages()
+	} else {
+		go g.nl.Recv(sol2bdnCh)
+	}
+}
+
+func (g *Gateway) sendAliveMessages() {
+	ticker := time.NewTicker(aliveMsgInterval)
+	defer ticker.Stop()
+
+	for {
+		if _, err := g.conn.WriteToUDP([]byte(solana.AliveMsg), g.bdnUDPAddr); err != nil {
+			g.lg.Errorf("sendAliveMessages: write to UDP: %v", err)
+		}
+
+		<-ticker.C
+	}
 }
 
 func (g *Gateway) receiveShredsFromBDN(broadcastCh chan []byte) {
@@ -210,8 +232,10 @@ func (g *Gateway) broadcastToSolana(ch <-chan []byte) {
 	}
 
 	for buf := range ch {
-		if _, err := g.conn.WriteToUDP(buf, g.solana); err != nil {
-			g.lg.Errorf("broadcastToSolana: write to UDP: %s", err)
+		if !g.noValidator {
+			if _, err := g.conn.WriteToUDP(buf, g.solana); err != nil {
+				g.lg.Errorf("broadcastToSolana: write to UDP: %s", err)
+			}
 		}
 		for _, addr := range g.addressesToSendShreds {
 			_, _ = g.conn.WriteToUDP(buf, addr)
