@@ -187,6 +187,10 @@ func (s *Stats) RecordUnseenShred(src *net.UDPAddr, shred *solana.PartialShred) 
 }
 
 func (s *Stats) RecordNewGateway(peerIP string, version string, accountID string) {
+	if s.fluentD == nil {
+		return
+	}
+
 	s.fluentD.LogConnectedGateway(peerIP, version, accountID)
 }
 

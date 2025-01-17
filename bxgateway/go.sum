@@ -1,5 +1,5 @@
-github.com/bloXroute-Labs/gateway/v2 v2.129.57 h1:hnvQX59DuhVuCC4AIvYbKMi7L9d0Y/ypksJKkj59PK8=
-github.com/bloXroute-Labs/gateway/v2 v2.129.57/go.mod h1:pkzFns93NU5MssNsQFvfaNTYozXNbJOIaUMdw+MGPw4=
+github.com/bloXroute-Labs/gateway/v2 v2.129.62 h1:KGQDDm0YiUHpKaf2tbOOy6ie4aNckFAXWZ/o4Svj32A=
+github.com/bloXroute-Labs/gateway/v2 v2.129.62/go.mod h1:z3/8fzGRUtnoCSOwvV/2J07EAZidovt6MhYXWJFddnY=
 github.com/bmizerany/assert v0.0.0-20160611221934-b7ed37b82869 h1:DDGfHa7BWjL4YnC6+E63dPcxHo2sUxDIu8g3QgEJdRY=
 github.com/bmizerany/assert v0.0.0-20160611221934-b7ed37b82869/go.mod h1:Ekp36dRnpXw/yCqJaO+ZrUyxD+3VXMFFr56k5XYrpB4=
 github.com/coreos/go-systemd/v22 v22.5.0/go.mod h1:Y58oyj3AT4RCenI/lSvhwexgC+NSVTIJ3seZv2GcEnc=
