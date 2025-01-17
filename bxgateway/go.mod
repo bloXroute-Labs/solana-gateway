@@ -12,7 +12,7 @@ require (
 )
 
 require (
-	github.com/bloXroute-Labs/gateway/v2 v2.129.57 // indirect
+	github.com/bloXroute-Labs/gateway/v2 v2.129.62 // indirect
 	github.com/cpuguy83/go-md2man/v2 v2.0.5 // indirect
 	github.com/fluent/fluent-logger-golang v1.9.0 // indirect
 	github.com/google/uuid v1.6.0 // indirect

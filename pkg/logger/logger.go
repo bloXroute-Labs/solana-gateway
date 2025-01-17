@@ -99,3 +99,21 @@ func (l *logrusLogger) Warn(s string)                     { log.Warnf(s) }
 func (l *logrusLogger) Warnf(s string, a ...interface{})  { log.Warnf(s, a...) }
 func (l *logrusLogger) Error(s string)                    { log.Error(s) }
 func (l *logrusLogger) Errorf(s string, a ...interface{}) { log.Errorf(s, a...) }
+
+type noopLogger struct{}
+
+func (l *noopLogger) Trace(string)                  {}
+func (l *noopLogger) Tracef(string, ...interface{}) {}
+func (l *noopLogger) Debug(string)                  {}
+func (l *noopLogger) Debugf(string, ...interface{}) {}
+func (l *noopLogger) Info(string)                   {}
+func (l *noopLogger) Infof(string, ...interface{})  {}
+func (l *noopLogger) Warn(string)                   {}
+func (l *noopLogger) Warnf(string, ...interface{})  {}
+func (l *noopLogger) Error(string)                  {}
+func (l *noopLogger) Errorf(string, ...interface{}) {}
+
+// NewNoopLogger returns a logger that does nothing
+func NewNoopLogger() Logger {
+	return &noopLogger{}
+}

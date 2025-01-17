@@ -20,30 +20,42 @@ type NetworkListener struct {
 	lg           logger.Logger
 	cache        *cache.AlterKey
 	stats        *bdn.Stats
-	handles      []*pcap.Handle
+	inHandles    []*pcap.Handle
+	outHandles   []*pcap.Handle
 	statsAddr    *net.UDPAddr
 	netInterface string
 }
 
-func NewNetworkListener(ctx context.Context, lg logger.Logger, cache *cache.AlterKey, stats *bdn.Stats, netInterface string, ports []int) (*NetworkListener, error) {
+func NewNetworkListener(ctx context.Context, lg logger.Logger, cache *cache.AlterKey, stats *bdn.Stats, netInterface string, inPorts, outPorts []int) (*NetworkListener, error) {
 	nl := &NetworkListener{
 		ctx:          ctx,
 		lg:           lg,
 		cache:        cache,
 		stats:        stats,
 		netInterface: netInterface,
-		handles:      make([]*pcap.Handle, 0, len(ports)),
+		inHandles:    make([]*pcap.Handle, 0, len(inPorts)),
+		outHandles:   make([]*pcap.Handle, 0, len(outPorts)),
 	}
 
 	var statsIP net.IP
-	for _, p := range ports {
-		handle, ip, err := packet.NewIncomingUDPNetworkSniffHandle(netInterface, p)
-		if err != nil {
-			return nil, fmt.Errorf("new network listen handle: %w", err)
+
+	for i, ports := range [][]int{inPorts, outPorts} {
+		outgoing := i != 0
+
+		handles := &nl.inHandles
+		if outgoing {
+			handles = &nl.outHandles
 		}
 
-		nl.handles = append(nl.handles, handle)
-		statsIP = ip
+		for _, p := range ports {
+			handle, ip, err := packet.NewUDPNetworkSniffHandle(netInterface, p, outgoing)
+			if err != nil {
+				return nil, fmt.Errorf("new network listen handle: %w", err)
+			}
+
+			*handles = append(*handles, handle)
+			statsIP = ip
+		}
 	}
 
 	nl.statsAddr = &net.UDPAddr{IP: statsIP}
@@ -54,10 +66,11 @@ func (s *NetworkListener) Recv(ch chan<- *solana.PartialShred) {
 	var sniffRecvCh = make(chan *packet.SniffPacket, recvChBuf)
 	var done = s.ctx.Done()
 
-	for _, handle := range s.handles {
+	for _, handle := range append(s.inHandles, s.outHandles...) {
 		go packet.NewSniffer(s.ctx, s.lg, handle).SniffUDPNetwork(sniffRecvCh)
 	}
 
+	localIP := s.statsAddr.IP.String()
 	for i := 0; ; i++ {
 		select {
 		case sp := <-sniffRecvCh:
@@ -79,6 +92,12 @@ func (s *NetworkListener) Recv(ch chan<- *solana.PartialShred) {
 				continue
 			}
 
+			if len(s.outHandles) != 0 {
+				outgoing := sp.Packet.SrcIP == localIP
+				if outgoing {
+					s.lg.Infof("broadcast shred %d:%d", shred.Slot, shred.Index)
+				}
+			}
 			s.stats.RecordUnseenShred(s.statsAddr, shred)
 
 			select {

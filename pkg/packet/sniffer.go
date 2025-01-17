@@ -111,7 +111,7 @@ func parseUDPPacket(pkt []byte) (*Packet, error) {
 // NewFileSniffHandle reads pcap from file source
 func NewFileSniffHandle(file string) (*pcap.Handle, error) { return pcap.OpenOffline(file) }
 
-func NewIncomingUDPNetworkSniffHandle(netInterface string, port int) (*pcap.Handle, net.IP, error) {
+func NewUDPNetworkSniffHandle(netInterface string, port int, outgoing bool) (*pcap.Handle, net.IP, error) {
 	h, err := pcap.NewInactiveHandle(netInterface)
 	if err != nil {
 		return nil, nil, err
@@ -148,8 +148,13 @@ func NewIncomingUDPNetworkSniffHandle(netInterface string, port int) (*pcap.Hand
 		return nil, nil, err
 	}
 
-	err = handle.SetBPFFilter(fmt.Sprintf("udp and dst port %d and dst host %s", port, inet))
-	if err != nil {
+	dir := "dst"
+	if outgoing {
+		dir = "src"
+	}
+
+	expr := fmt.Sprintf("udp and %s port %d and %s host %s", dir, port, dir, inet)
+	if err = handle.SetBPFFilter(expr); err != nil {
 		return nil, nil, err
 	}
 

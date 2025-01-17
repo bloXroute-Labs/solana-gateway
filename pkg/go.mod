@@ -3,7 +3,7 @@ module github.com/bloXroute-Labs/solana-gateway/pkg
 go 1.23
 
 require (
-	github.com/bloXroute-Labs/gateway/v2 v2.129.57
+	github.com/bloXroute-Labs/gateway/v2 v2.129.62
 	github.com/fluent/fluent-logger-golang v1.9.0
 	github.com/gagliardetto/solana-go v1.11.0
 	github.com/google/gopacket v1.1.19
