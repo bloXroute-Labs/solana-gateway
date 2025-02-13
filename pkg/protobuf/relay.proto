@@ -10,6 +10,7 @@ service Relay {
 message RegisterRequest {
     string auth_header = 1;
     string version = 2;
+    int64 server_port = 3;
 }
 
 message RegisterResponse {

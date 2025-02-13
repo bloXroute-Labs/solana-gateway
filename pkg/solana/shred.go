@@ -3,6 +3,7 @@ package solana
 import (
 	"encoding/base64"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -229,6 +230,18 @@ func validateShredSize(sz int, shredVariant *ShredVariantByte) error {
 		}
 	default:
 		return fmt.Errorf("unknown shred variant: %d", shredVariant.Variant)
+	}
+
+	return nil
+}
+
+func ValidateShredSizeSimple(size int) error {
+	if size > sizeOfLegacyCodeShredPayload {
+		return errors.New("too big")
+	}
+
+	if size < sizeOfMerkleDataShredPayload {
+		return errors.New("too small")
 	}
 
 	return nil
