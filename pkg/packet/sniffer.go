@@ -6,7 +6,8 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"time"
+	"net/netip"
+	"sync"
 
 	"github.com/bloXroute-Labs/solana-gateway/pkg/logger"
 	"github.com/google/gopacket"
@@ -15,36 +16,71 @@ import (
 )
 
 type SniffPacket struct {
-	SniffTime time.Time
-	Packet    *Packet
+	SrcAddr   netip.Addr
+	SrcHandle *pcap.Handle
+	Payload   []byte
+
+	pool *sync.Pool
 }
 
-type Packet struct {
-	SrcIP    string
-	SrcPort  uint16
-	DstIP    string
-	DstPort  uint16
-	Protocol string
-	Payload  []byte
+func (p *SniffPacket) Free() {
+	p.pool.Put(p)
+}
+
+type PacketValidator interface {
+	// Validate is suppose to return nil if packet is considered valid or error otherwise
+	Validate(payload []byte) error
+}
+
+type Option func(*Sniffer)
+
+// WithPacketValidator adds possibility to validate packets before allocating memory for them
+// NOTE: validation is blocking so it might slow down the reader in case of heavy cpu-bound operations
+func WithPacketValidator(v PacketValidator) Option {
+	return func(s *Sniffer) { s.validators = append(s.validators, v) }
 }
 
 type Sniffer struct {
-	ctx    context.Context
-	lg     logger.Logger
-	Handle *pcap.Handle
+	Handle     *pcap.Handle
+	Intolerant bool
+
+	ctx        context.Context
+	lg         logger.Logger
+	pool       *sync.Pool
+	validators []PacketValidator
 }
 
-func NewSniffer(ctx context.Context, lg logger.Logger, handle *pcap.Handle) *Sniffer {
-	return &Sniffer{
-		ctx:    ctx,
-		lg:     lg,
-		Handle: handle,
+func newPacketPoolFunc(pool *sync.Pool) func() interface{} {
+	return func() interface{} {
+		return &SniffPacket{
+			SrcAddr: netip.Addr{},
+			Payload: []byte(nil), // don't allocate underlying array for now
+			pool:    pool,
+		}
 	}
 }
 
-func (s *Sniffer) SniffUDPNetwork(ch chan<- *SniffPacket) {
+func NewSniffer(ctx context.Context, lg logger.Logger, handle *pcap.Handle, opts ...Option) *Sniffer {
+	var pool = &sync.Pool{}
+	pool.New = newPacketPoolFunc(pool)
+
+	var sniffer = &Sniffer{
+		ctx:        ctx,
+		lg:         lg,
+		Handle:     handle,
+		pool:       pool,
+		validators: make([]PacketValidator, 0),
+	}
+
+	for _, opt := range opts {
+		opt(sniffer)
+	}
+
+	return sniffer
+}
+
+func (s *Sniffer) SniffUDPNetworkNoClose(ch chan<- *SniffPacket) {
 	defer s.Handle.Close()
-	defer close(ch)
 	var done = s.ctx.Done()
 
 	for {
@@ -54,7 +90,7 @@ func (s *Sniffer) SniffUDPNetwork(ch chan<- *SniffPacket) {
 		default:
 		}
 
-		pkt, ci, err := s.Handle.ReadPacketData()
+		data, _, err := s.Handle.ZeroCopyReadPacketData()
 		if err != nil {
 			if errors.Is(err, io.EOF) {
 				return
@@ -64,25 +100,39 @@ func (s *Sniffer) SniffUDPNetwork(ch chan<- *SniffPacket) {
 			continue
 		}
 
-		p, err := parseUDPPacket(pkt)
+		pkt, err := s.DecodePacket(data)
 		if err != nil {
 			s.lg.Errorf("sniffer: parse udp packet: %s", err)
+			if s.Intolerant {
+				return
+			}
 			continue
 		}
 
 		select {
-		case ch <- &SniffPacket{
-			SniffTime: ci.Timestamp,
-			Packet:    p,
-		}:
+		case ch <- pkt:
 		default:
+			pkt.Free()
 			s.lg.Warn("sniffer: forward packet: channel is full")
 		}
 	}
 }
 
-func parseUDPPacket(pkt []byte) (*Packet, error) {
-	packet := gopacket.NewPacket(pkt, layers.LayerTypeEthernet, gopacket.Default)
+func (s *Sniffer) SniffUDPNetwork(ch chan<- *SniffPacket) {
+	defer close(ch)
+	s.SniffUDPNetworkNoClose(ch)
+}
+
+// DecodePacket decodes UDP payload from data ensuring that original bytes are not used
+// in the resulting SniffPacket. If error is returned then the packet should not be returned into the pool.
+func (s *Sniffer) DecodePacket(data []byte) (*SniffPacket, error) {
+	packet := gopacket.NewPacket(
+		data,
+		layers.LayerTypeEthernet,
+		gopacket.DecodeOptions{
+			NoCopy: true,
+		},
+	)
 
 	ipv4Layer := packet.Layer(layers.LayerTypeIPv4)
 	if ipv4Layer == nil {
@@ -96,16 +146,33 @@ func parseUDPPacket(pkt []byte) (*Packet, error) {
 		return nil, errors.New("packet does not contain UDP Layer")
 	}
 
-	udp, _ := udpLayer.(*layers.UDP)
+	var payload = udpLayer.LayerPayload()
+	for _, vdt := range s.validators {
+		err := vdt.Validate(payload)
+		if err != nil {
+			return nil, fmt.Errorf("packet validation: %s", err)
+		}
+	}
 
-	return &Packet{
-		SrcIP:    ipv4.SrcIP.String(),
-		SrcPort:  uint16(udp.SrcPort),
-		DstIP:    ipv4.DstIP.String(),
-		DstPort:  uint16(udp.DstPort),
-		Protocol: "UDP", // hardcoded
-		Payload:  udpLayer.LayerPayload(),
-	}, nil
+	// creates new netip.Addr (looses the connection with incoming slice)
+	srcAddr, ok := netip.AddrFromSlice(ipv4.SrcIP)
+	if !ok {
+		return nil, fmt.Errorf("packet contains invalid address: %s", ipv4.SrcIP)
+	}
+
+	var pkt = s.pool.Get().(*SniffPacket)
+	if len(payload) > cap(pkt.Payload) {
+		pkt.Payload = make([]byte, len(payload))
+	}
+
+	copy(pkt.Payload, payload)
+
+	// resize if allocated buf if larger than needed
+	// e.g. when the packet we got from the pool used to hold larger payload before
+	pkt.Payload = pkt.Payload[:len(payload)]
+	pkt.SrcAddr = srcAddr
+	pkt.SrcHandle = s.Handle
+	return pkt, nil
 }
 
 // NewFileSniffHandle reads pcap from file source

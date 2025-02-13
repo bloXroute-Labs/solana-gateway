@@ -11,18 +11,20 @@ type Registrar interface {
 }
 
 type bdnRegistrar struct {
-	ctx     context.Context
-	client  proto.RelayClient
-	header  string
-	version string
+	ctx        context.Context
+	client     proto.RelayClient
+	header     string
+	version    string
+	serverPort int64
 }
 
-func NewBDNRegistrar(ctx context.Context, client proto.RelayClient, header, version string) Registrar {
+func NewBDNRegistrar(ctx context.Context, client proto.RelayClient, header, version string, serverPort int64) Registrar {
 	return &bdnRegistrar{
-		ctx:     ctx,
-		client:  client,
-		header:  header,
-		version: version,
+		ctx:        ctx,
+		client:     client,
+		header:     header,
+		version:    version,
+		serverPort: serverPort,
 	}
 }
 
@@ -31,6 +33,7 @@ func (r *bdnRegistrar) Register() (string, error) {
 	rsp, err := r.client.Register(r.ctx, &proto.RegisterRequest{
 		AuthHeader: r.header,
 		Version:    r.version,
+		ServerPort: r.serverPort,
 	})
 
 	if err != nil {

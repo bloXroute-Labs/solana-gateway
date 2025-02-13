@@ -2,7 +2,7 @@ package bdn
 
 import (
 	"fmt"
-	"net"
+	"net/netip"
 	"sort"
 	"strings"
 	"sync"
@@ -74,23 +74,24 @@ type Stats struct {
 	flushTimeout time.Duration
 	lg           logger.Logger
 	fluentD      *FluentD
-	relays       []string
 
 	totalShredsRecorder  *shredsBySrcRecorder
 	unseenShredsRecorder *shredsBySrcRecorder
 	firstShredRecorder   *firstShredRecorder
+
+	flushUnseenShredsChan chan *ShredsBySource
 }
 
 type (
 	shredsBySrcRecorder struct {
-		ch chan *net.UDPAddr
-		mp map[string]int
+		ch chan netip.Addr
+		mp map[netip.Addr]int // addr: num_received_shreds
 		mx sync.Mutex
 	}
 
-	shredsBySrcRecord struct {
-		src    string
-		shreds int
+	ShredsBySrcRecord struct {
+		Src    string
+		Shreds int
 	}
 )
 
@@ -103,7 +104,7 @@ type (
 	}
 
 	firstShredRecord struct {
-		src   *net.UDPAddr
+		src   netip.Addr
 		slot  uint64
 		index uint32
 		typ   string
@@ -118,6 +119,8 @@ func NewStats(lg logger.Logger, timeout time.Duration, opts ...StatsOption) *Sta
 		totalShredsRecorder:  newShredsBySrcRecorder(),
 		unseenShredsRecorder: newShredsBySrcRecorder(),
 		firstShredRecorder:   newFirstShredRecorder(lg),
+
+		flushUnseenShredsChan: make(chan *ShredsBySource),
 	}
 
 	for _, o := range opts {
@@ -135,25 +138,24 @@ func NewStats(lg logger.Logger, timeout time.Duration, opts ...StatsOption) *Sta
 				totalShreds := st.totalShredsRecorder.flush()
 				unseenShreds := st.unseenShredsRecorder.flush()
 
-				st.lg.Infof("stats: total shreds by source: %s unseen shreds by source: %s. %s",
-					totalShreds.String(), unseenShreds.String(), unseenShreds.FirstSeenFromBDN())
+				select {
+				case st.flushUnseenShredsChan <- unseenShreds:
+				default:
+				}
+
+				st.lg.Infof("stats: total shreds by source: %s unseen shreds by source: %s",
+					totalShreds.String(), unseenShreds.String())
 
 				st.firstShredRecorder.clean()
 
 				if st.fluentD != nil {
-					for _, ts := range totalShreds.stats {
-						for _, us := range unseenShreds.stats {
-							if ts.src != us.src {
+					for _, ts := range totalShreds.Stats {
+						for _, us := range unseenShreds.Stats {
+							if ts.Src != us.Src {
 								continue
 							}
 
-							ipPort := strings.Split(ts.src, ":")
-							if len(ipPort) != 2 {
-								lg.Errorf("stats: invalid ip-port: %s", ts.src)
-								break
-							}
-
-							st.fluentD.LogShredStats(ipPort[0], uint32(ts.shreds), uint32(us.shreds))
+							st.fluentD.LogShredStats(ts.Src, uint32(ts.Shreds), uint32(us.Shreds))
 							break
 						}
 					}
@@ -167,21 +169,15 @@ func NewStats(lg logger.Logger, timeout time.Duration, opts ...StatsOption) *Sta
 
 type StatsOption func(*Stats)
 
-// TODO: this is way too highly coupled, stats and fluentd domains must be redesigned!
-
-func StatsWithFluentD(fd *FluentD, relays []*net.UDPAddr) StatsOption {
+func StatsWithFluentD(fd *FluentD) StatsOption {
 	return func(s *Stats) {
 		s.fluentD = fd
-		s.relays = make([]string, 0, len(relays))
-		for _, r := range relays {
-			s.relays = append(s.relays, r.String())
-		}
 	}
 }
 
-func (s *Stats) RecordNewShred(src *net.UDPAddr) { s.totalShredsRecorder.record(src) }
+func (s *Stats) RecordNewShred(src netip.Addr) { s.totalShredsRecorder.record(src) }
 
-func (s *Stats) RecordUnseenShred(src *net.UDPAddr, shred *solana.PartialShred) {
+func (s *Stats) RecordUnseenShred(src netip.Addr, shred *solana.PartialShred) {
 	s.unseenShredsRecorder.record(src)
 	s.firstShredRecorder.record(src, shred)
 }
@@ -194,6 +190,11 @@ func (s *Stats) RecordNewGateway(peerIP string, version string, accountID string
 	s.fluentD.LogConnectedGateway(peerIP, version, accountID)
 }
 
+// RecvFlushUnseenShreds returns a chan which drops UnseenShredsBySource when flushing for additional logging.
+func (s *Stats) RecvFlushUnseenShreds() chan *ShredsBySource {
+	return s.flushUnseenShredsChan
+}
+
 func nextZeroSecondWindow() time.Time {
 	t := time.Now()
 	secDiff := time.Second * time.Duration(59-t.Second())
@@ -203,8 +204,8 @@ func nextZeroSecondWindow() time.Time {
 
 func newShredsBySrcRecorder() *shredsBySrcRecorder {
 	rec := &shredsBySrcRecorder{
-		ch: make(chan *net.UDPAddr, shredsRecorderChanBuf),
-		mp: make(map[string]int),
+		ch: make(chan netip.Addr, shredsRecorderChanBuf),
+		mp: make(map[netip.Addr]int),
 	}
 
 	go rec.run()
@@ -223,7 +224,7 @@ func newFirstShredRecorder(lg logger.Logger) *firstShredRecorder {
 	return rec
 }
 
-func (r *firstShredRecorder) record(src *net.UDPAddr, shred *solana.PartialShred) {
+func (r *firstShredRecorder) record(src netip.Addr, shred *solana.PartialShred) {
 	select {
 	case r.ch <- &firstShredRecord{
 		src:   src,
@@ -267,7 +268,7 @@ func (r *firstShredRecorder) clean() {
 	r.mx.Unlock()
 }
 
-func (r *shredsBySrcRecorder) record(src *net.UDPAddr) {
+func (r *shredsBySrcRecorder) record(src netip.Addr) {
 	select {
 	case r.ch <- src:
 	default:
@@ -276,64 +277,45 @@ func (r *shredsBySrcRecorder) record(src *net.UDPAddr) {
 
 func (r *shredsBySrcRecorder) run() {
 	for src := range r.ch {
-		key := src.String()
+		// key := src.String()
 
 		r.mx.Lock()
-		if v, ok := r.mp[key]; ok {
-			r.mp[key] = v + 1
+		if v, ok := r.mp[src]; ok {
+			r.mp[src] = v + 1
 		} else {
-			r.mp[key] = 1
+			r.mp[src] = 1
 		}
 		r.mx.Unlock()
 	}
 }
 
-func (r *shredsBySrcRecorder) flush() *shredsBySource {
-	stats := make([]*shredsBySrcRecord, 0)
+func (r *shredsBySrcRecorder) flush() *ShredsBySource {
+	stats := make([]*ShredsBySrcRecord, 0)
 
 	r.mx.Lock()
 	for src, shreds := range r.mp {
-		stats = append(stats, &shredsBySrcRecord{
-			src:    src,
-			shreds: shreds,
+		stats = append(stats, &ShredsBySrcRecord{
+			Src:    src.String(),
+			Shreds: shreds,
 		})
 
 		delete(r.mp, src)
 	}
 	r.mx.Unlock()
 
-	sort.Slice(stats, func(i, j int) bool { return stats[i].shreds > stats[j].shreds })
-	return &shredsBySource{stats: stats}
+	sort.Slice(stats, func(i, j int) bool { return stats[i].Shreds > stats[j].Shreds })
+	return &ShredsBySource{Stats: stats}
 }
 
-type shredsBySource struct {
-	stats []*shredsBySrcRecord
+type ShredsBySource struct {
+	Stats []*ShredsBySrcRecord
 }
 
-func (s *shredsBySource) String() string {
+func (s *ShredsBySource) String() string {
 	statsStr := make([]string, 0)
-	for _, st := range s.stats {
-		statsStr = append(statsStr, fmt.Sprintf("(%s, %d)", st.src, st.shreds))
+	for _, st := range s.Stats {
+		statsStr = append(statsStr, fmt.Sprintf("(%s, %d)", st.Src, st.Shreds))
 	}
 
 	return fmt.Sprintf("[%s]", strings.Join(statsStr, ", "))
-}
-
-func (s *shredsBySource) FirstSeenFromBDN() string {
-	var totalShreds, totalShredsSeenFromBdn int
-	for _, st := range s.stats {
-		_, port, err := net.SplitHostPort(st.src)
-		if err != nil {
-			fmt.Printf("Error parsing address %v: %v (calculaiton for first seen from bdn will not include this src)", st.src, err)
-			continue
-		}
-		totalShreds += st.shreds
-		if port != "0" {
-			totalShredsSeenFromBdn += st.shreds
-		}
-	}
-	if totalShreds == 0 {
-		return "No shred records found"
-	}
-	return fmt.Sprintf("Seen %.2f%% of shreds first from BDN", (float64(totalShredsSeenFromBdn)/float64(totalShreds))*100)
 }
