@@ -207,6 +207,8 @@ func run(
 		gatewayModePassive = os.Getenv(passiveModeEnv) != ""
 	)
 
+	defer cancel()
+
 	lg.Infof("dynamic port range %d-%d", dynamicPortRangeMin, dynamicPortRangeMax)
 
 	signal.Notify(sig, os.Interrupt)

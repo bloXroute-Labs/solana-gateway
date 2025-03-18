@@ -123,7 +123,7 @@ func (g *Gateway) printUnseenStats() {
 		return
 	}
 
-	var localAddrString = g.nl.Addr().String()
+	localAddrString := g.nl.Addr().String()
 
 	for unseenShreds := range g.stats.RecvFlushUnseenShreds() {
 		var totalShreds, totalShredsSeenFromBdn int
@@ -207,8 +207,10 @@ func (g *Gateway) sendAliveMessages() {
 	defer ticker.Stop()
 
 	for {
-		if err := g.send2BDNFd.UnsafeWrite([]byte(solana.AliveMsg), g.bdnUDPAddr.SockAddr); err != nil {
-			g.lg.Errorf("sendAliveMessages: write to UDP: %v", err)
+		if g.bdnUDPAddr != nil {
+			if err := g.send2BDNFd.UnsafeWrite(solana.AliveMsg, g.bdnUDPAddr.SockAddr); err != nil {
+				g.lg.Errorf("sendAliveMessages: write to UDP: %v", err)
+			}
 		}
 
 		<-ticker.C
@@ -216,11 +218,9 @@ func (g *Gateway) sendAliveMessages() {
 }
 
 func (g *Gateway) receiveShredsFromBDN(broadcastCh chan *[]byte) {
-	var done = g.ctx.Done()
-
 	for i := 0; ; i++ {
 		select {
-		case <-done:
+		case <-g.ctx.Done():
 			return
 		default:
 		}

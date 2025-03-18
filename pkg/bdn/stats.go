@@ -128,43 +128,71 @@ func NewStats(lg logger.Logger, timeout time.Duration, opts ...StatsOption) *Sta
 	}
 
 	go func() {
-		time.Sleep(time.Until(nextZeroSecondWindow()))
+		now := time.Now()
+		time.Sleep(time.Now().Truncate(st.flushTimeout).Add(st.flushTimeout).Sub(now))
+
 		ticker := time.NewTicker(st.flushTimeout)
+		defer ticker.Stop()
 
-		go func() {
-			for {
-				<-ticker.C
+		for range ticker.C {
+			totalShreds := st.totalShredsRecorder.flush()
+			unseenShreds := st.unseenShredsRecorder.flush()
 
-				totalShreds := st.totalShredsRecorder.flush()
-				unseenShreds := st.unseenShredsRecorder.flush()
+			select {
+			case st.flushUnseenShredsChan <- unseenShreds:
+			default:
+			}
+			st.logStats(totalShreds, unseenShreds)
 
-				select {
-				case st.flushUnseenShredsChan <- unseenShreds:
-				default:
-				}
+			st.firstShredRecorder.clean()
 
-				st.lg.Infof("stats: total shreds by source: %s unseen shreds by source: %s",
-					totalShreds.String(), unseenShreds.String())
-
-				st.firstShredRecorder.clean()
-
-				if st.fluentD != nil {
-					for _, ts := range totalShreds.Stats {
-						for _, us := range unseenShreds.Stats {
-							if ts.Src != us.Src {
-								continue
-							}
-
-							st.fluentD.LogShredStats(ts.Src, uint32(ts.Shreds), uint32(us.Shreds))
-							break
+			if st.fluentD != nil {
+				for _, ts := range totalShreds.Stats {
+					for _, us := range unseenShreds.Stats {
+						if ts.Src != us.Src {
+							continue
 						}
+
+						st.fluentD.LogShredStats(ts.Src, uint32(ts.Shreds), uint32(us.Shreds))
+						break
 					}
 				}
 			}
-		}()
+		}
 	}()
 
 	return st
+}
+
+func (s *Stats) logStats(totalShreds *ShredsBySource, unseenShreds *ShredsBySource) {
+	var totalUnseenShreds int
+	for _, unseen := range unseenShreds.Stats {
+		totalUnseenShreds += unseen.Shreds
+	}
+
+	for _, total := range totalShreds.Stats {
+		unseenCount := 0
+
+		for _, unseen := range unseenShreds.Stats {
+			if unseen.Src == total.Src {
+				unseenCount = unseen.Shreds
+				break
+			}
+		}
+
+		firstSeenPercentage := 0.0
+		kpi := 0.0
+
+		if totalUnseenShreds > 0 {
+			firstSeenPercentage = (float64(unseenCount) / float64(totalUnseenShreds)) * 100
+		}
+		if total.Shreds > 0 {
+			kpi = float64(unseenCount) / float64(total.Shreds)
+		}
+
+		s.lg.Infof("%s, total shreds: %d, first seen shreds: %d (%.2f%%), kpi: %.2f",
+			total.Src, total.Shreds, unseenCount, firstSeenPercentage, kpi)
+	}
 }
 
 type StatsOption func(*Stats)
@@ -193,13 +221,6 @@ func (s *Stats) RecordNewGateway(peerIP string, version string, accountID string
 // RecvFlushUnseenShreds returns a chan which drops UnseenShredsBySource when flushing for additional logging.
 func (s *Stats) RecvFlushUnseenShreds() chan *ShredsBySource {
 	return s.flushUnseenShredsChan
-}
-
-func nextZeroSecondWindow() time.Time {
-	t := time.Now()
-	secDiff := time.Second * time.Duration(59-t.Second())
-	nanoDiff := time.Duration(1e9 - t.Nanosecond())
-	return t.Add(secDiff).Add(nanoDiff)
 }
 
 func newShredsBySrcRecorder() *shredsBySrcRecorder {
@@ -309,13 +330,4 @@ func (r *shredsBySrcRecorder) flush() *ShredsBySource {
 
 type ShredsBySource struct {
 	Stats []*ShredsBySrcRecord
-}
-
-func (s *ShredsBySource) String() string {
-	statsStr := make([]string, 0)
-	for _, st := range s.Stats {
-		statsStr = append(statsStr, fmt.Sprintf("(%s, %d)", st.Src, st.Shreds))
-	}
-
-	return fmt.Sprintf("[%s]", strings.Join(statsStr, ", "))
 }

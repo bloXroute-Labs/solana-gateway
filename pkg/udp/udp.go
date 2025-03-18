@@ -41,8 +41,13 @@ func (f *FDSet) NextFD() (*FDConn, error) {
 		return nil, err
 	}
 
+	if err := syscall.SetsockoptInt(fd, syscall.SOL_SOCKET, syscall.SO_SNDBUF, 7500000); err != nil {
+		syscall.Close(fd)
+		return nil, fmt.Errorf("setsockopt: %s", err)
+	}
+
 	var boundPort int64
-	var startPort = f.current
+	startPort := f.current
 
 	for i := 0; ; i++ {
 		port := f.current
@@ -90,11 +95,17 @@ func Server(port int) (*FDConn, error) {
 		return nil, fmt.Errorf("socket: %s", err)
 	}
 
+	if err := syscall.SetsockoptInt(fd, syscall.SOL_SOCKET, syscall.SO_RCVBUF, 7500000); err != nil {
+		syscall.Close(fd)
+		return nil, fmt.Errorf("setsockopt: %s", err)
+	}
+
 	err = syscall.Bind(fd, &syscall.SockaddrInet4{
 		Addr: [4]byte{0, 0, 0, 0},
 		Port: port,
 	})
 	if err != nil {
+		syscall.Close(fd)
 		return nil, fmt.Errorf("bind: %s", err)
 	}
 
@@ -260,7 +271,7 @@ func SockAddrFromUDPString(addr string) (syscall.Sockaddr, error) {
 }
 
 func SockAddrFromNetUDPAddr(addr *net.UDPAddr) (syscall.Sockaddr, error) {
-	var ip = addr.IP.To4()
+	ip := addr.IP.To4()
 	return &syscall.SockaddrInet4{Port: addr.Port, Addr: [4]byte{ip[0], ip[1], ip[2], ip[3]}}, nil
 }
 

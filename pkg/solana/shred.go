@@ -17,20 +17,22 @@ import (
 // stored the payload.
 //
 // see solana/ledger/src/shred.rs
-const sizeOfCommonShredHeader = 83
-const sizeOfSignature = 64
-const sizeOfShredVariant = 1
-const sizeOfShredSlot = 8
-const sizeOfShredIndex = 4
-const sizeOfVersion = 2
-const sizeOfFecSet = 4
-const sizeOfu16 = 2
-const sizeOfLegacyDataShredPayload = 1228
-const sizeOfLegacyCodeShredPayload = sizeOfLegacyDataShredPayload
-const sizeOfMerkleCodeShredHeaders = 89
-const sizeOfMerkleCodeShredPayload = 1228
-const sizeOfMerkleDataShredPayload = sizeOfMerkleCodeShredPayload -
-	sizeOfMerkleCodeShredHeaders + sizeOfSignature
+const (
+	sizeOfCommonShredHeader      = 83
+	sizeOfSignature              = 64
+	sizeOfShredVariant           = 1
+	sizeOfShredSlot              = 8
+	sizeOfShredIndex             = 4
+	sizeOfVersion                = 2
+	sizeOfFecSet                 = 4
+	sizeOfu16                    = 2
+	sizeOfLegacyDataShredPayload = 1228
+	sizeOfLegacyCodeShredPayload = sizeOfLegacyDataShredPayload
+	sizeOfMerkleCodeShredHeaders = 89
+	sizeOfMerkleCodeShredPayload = 1228
+	sizeOfMerkleDataShredPayload = sizeOfMerkleCodeShredPayload -
+		sizeOfMerkleCodeShredHeaders + sizeOfSignature
+)
 
 const (
 	LegacyCode         byte = 0b0101 << 4
@@ -41,7 +43,6 @@ const (
 	MerkleData         byte = 0b1000 << 4
 	MerkleDataChained  byte = 0b1001 << 4
 	MerkleDataResigned byte = 0b1011 << 4
-	AliveMsg                = "alive"
 )
 
 const (
@@ -54,6 +55,8 @@ const (
 	shredCodeCmp = 0b01 << 6
 	shredDataCmp = 0b10 << 6
 )
+
+var AliveMsg = []byte("alive")
 
 func (s *ShredVariantByte) IsCode() bool {
 	return (s.Variant & byte(shredMask)) == shredCodeCmp

@@ -19,3 +19,4 @@ logs/
 bin
 ssl/
 data-dir/
+relays.json
