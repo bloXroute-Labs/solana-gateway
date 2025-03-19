@@ -8,9 +8,9 @@ import (
 	"time"
 
 	"github.com/bloXroute-Labs/solana-gateway/bxgateway/internal/netlisten"
-	"github.com/bloXroute-Labs/solana-gateway/pkg/bdn"
 	"github.com/bloXroute-Labs/solana-gateway/pkg/cache"
 	"github.com/bloXroute-Labs/solana-gateway/pkg/logger"
+	"github.com/bloXroute-Labs/solana-gateway/pkg/ofr"
 	"github.com/bloXroute-Labs/solana-gateway/pkg/packet"
 	"github.com/bloXroute-Labs/solana-gateway/pkg/solana"
 	"github.com/bloXroute-Labs/solana-gateway/pkg/udp"
@@ -20,7 +20,7 @@ const (
 	udpShredSize     = 1228
 	aliveMsgInterval = 10 * time.Second
 
-	// noTrafficThreshold defines a period within which BDN is suppose to provide traffic,
+	// noTrafficThreshold defines a period within which OFR is suppose to provide traffic,
 	// if no traffic is received then the gateway makes additional Register call
 	noTrafficThreshold = time.Second * 10
 )
@@ -29,20 +29,20 @@ type Gateway struct {
 	ctx           context.Context
 	lg            logger.Logger
 	cache         *cache.AlterKey
-	stats         *bdn.Stats
+	stats         *ofr.Stats
 	nl            *netlisten.NetworkListener
 	pool          *sync.Pool
-	serverFd      *udp.FDConn // fd receiving traffic from bdn
-	send2BDNFd    *udp.FDConn // fd sending traffic to bdn
+	serverFd      *udp.FDConn // fd receiving traffic from ofr
+	send2OFRFd    *udp.FDConn // fd sending traffic to ofr
 	send2NodeFd   *udp.FDConn // fd sending traffic to node
 	solanaTVUAddr syscall.Sockaddr
-	bdnUDPAddrMx  *sync.RWMutex
-	bdnUDPAddr    *udp.Addr
+	ofrUDPAddrMx  *sync.RWMutex
+	ofrUDPAddr    *udp.Addr
 	registrar     Registrar
 	noTraffic     *time.Ticker
 
 	extraBroadcastAddrs       []syscall.Sockaddr // additional endpoints set via --broadcast-addresses
-	extraBroadcastFromBDNOnly bool
+	extraBroadcastFromOFROnly bool
 	noValidator               bool
 	passiveMode               bool
 }
@@ -53,7 +53,7 @@ func PassiveMode() Option { return func(g *Gateway) { g.passiveMode = true } }
 
 func WithoutSolanaNode() Option { return func(g *Gateway) { g.noValidator = true } }
 
-func WithBroadcastAddrs(addrs []string, bdnOnly bool) (Option, error) {
+func WithBroadcastAddrs(addrs []string, ofrOnly bool) (Option, error) {
 	var sockaddrs []syscall.Sockaddr
 
 	for _, addr := range addrs {
@@ -67,7 +67,7 @@ func WithBroadcastAddrs(addrs []string, bdnOnly bool) (Option, error) {
 
 	return func(g *Gateway) {
 		g.extraBroadcastAddrs = sockaddrs
-		g.extraBroadcastFromBDNOnly = bdnOnly
+		g.extraBroadcastFromOFROnly = ofrOnly
 	}, nil
 }
 
@@ -75,7 +75,7 @@ func New(
 	ctx context.Context,
 	lg logger.Logger,
 	cache *cache.AlterKey,
-	stats *bdn.Stats,
+	stats *ofr.Stats,
 	nl *netlisten.NetworkListener,
 	serverFd *udp.FDConn,
 	fdset *udp.FDSet,
@@ -83,7 +83,7 @@ func New(
 	registrar Registrar,
 	opts ...Option,
 ) (*Gateway, error) {
-	snd2BDNFd, err := fdset.NextFD()
+	snd2OFRFd, err := fdset.NextFD()
 	if err != nil {
 		return nil, fmt.Errorf("new fd: %s", err)
 	}
@@ -101,11 +101,11 @@ func New(
 		nl:            nl,
 		pool:          &sync.Pool{New: func() interface{} { s := make([]byte, udpShredSize); return &s }},
 		serverFd:      serverFd,
-		send2BDNFd:    snd2BDNFd,
+		send2OFRFd:    snd2OFRFd,
 		send2NodeFd:   snd2NodeFd,
 		solanaTVUAddr: solanaTVUAddr,
-		bdnUDPAddrMx:  &sync.RWMutex{},
-		bdnUDPAddr:    nil, // this addr is returned from registration endpoint
+		ofrUDPAddrMx:  &sync.RWMutex{},
+		ofrUDPAddr:    nil, // this addr is returned from registration endpoint
 		passiveMode:   false,
 		registrar:     registrar,
 	}
@@ -123,15 +123,15 @@ func (g *Gateway) printUnseenStats() {
 		return
 	}
 
-	var localAddrString = g.nl.Addr().String()
+	localAddrString := g.nl.Addr().String()
 
 	for unseenShreds := range g.stats.RecvFlushUnseenShreds() {
-		var totalShreds, totalShredsSeenFromBdn int
+		var totalShreds, totalShredsSeenFromOFR int
 
 		for _, st := range unseenShreds.Stats {
 			totalShreds += st.Shreds
 			if st.Src != localAddrString {
-				totalShredsSeenFromBdn += st.Shreds
+				totalShredsSeenFromOFR += st.Shreds
 			}
 		}
 
@@ -139,16 +139,16 @@ func (g *Gateway) printUnseenStats() {
 			g.lg.Infof("No shreds received")
 		}
 
-		g.lg.Infof("Seen %.2f%% of shreds first from BDN", (float64(totalShredsSeenFromBdn)/float64(totalShreds))*100)
+		g.lg.Infof("Seen %.2f%% of shreds first from OFR", (float64(totalShredsSeenFromOFR)/float64(totalShreds))*100)
 	}
 }
 
-// Register calls register endpoint and sets returned bdnUDPAddr
+// Register calls register endpoint and sets returned ofrUDPAddr
 func (g *Gateway) Register() (syscall.Sockaddr, error) {
 	// unregister the previous address
-	g.bdnUDPAddrMx.Lock()
-	g.bdnUDPAddr = nil
-	g.bdnUDPAddrMx.Unlock()
+	g.ofrUDPAddrMx.Lock()
+	g.ofrUDPAddr = nil
+	g.ofrUDPAddrMx.Unlock()
 
 	udpAddr, err := g.registrar.Register()
 	if err != nil {
@@ -157,7 +157,7 @@ func (g *Gateway) Register() (syscall.Sockaddr, error) {
 
 	sockAddr, err := udp.SockAddrFromUDPString(udpAddr)
 	if err != nil {
-		return nil, fmt.Errorf("resolve BDN UDP address: %s", err)
+		return nil, fmt.Errorf("resolve OFR UDP address: %s", err)
 	}
 
 	addr, err := udp.NewAddr(sockAddr)
@@ -165,18 +165,18 @@ func (g *Gateway) Register() (syscall.Sockaddr, error) {
 		return nil, fmt.Errorf("parse sockaddr: %s %s", udp.SockaddrString(sockAddr), err)
 	}
 
-	g.bdnUDPAddrMx.Lock()
-	defer g.bdnUDPAddrMx.Unlock()
+	g.ofrUDPAddrMx.Lock()
+	defer g.ofrUDPAddrMx.Unlock()
 
-	g.bdnUDPAddr = addr
+	g.ofrUDPAddr = addr
 
 	return sockAddr, nil
 }
 
 func (g *Gateway) Start() {
 	var (
-		bdn2NodeCh = make(chan *[]byte, 1e5)
-		node2BDNCh = make(chan *packet.SniffPacket, 1e5)
+		ofrNodeCh  = make(chan *[]byte, 1e5)
+		node2OFRCh = make(chan *packet.SniffPacket, 1e5)
 	)
 
 	addr, err := g.Register()
@@ -191,14 +191,14 @@ func (g *Gateway) Start() {
 	g.lg.Infof("gateway successfully registered, udp addr: %s", udp.SockaddrString(addr))
 
 	go g.reRegister()
-	go g.receiveShredsFromBDN(bdn2NodeCh)
-	go g.broadcastShredsToNode(bdn2NodeCh)
+	go g.receiveShredsFromOFR(ofrNodeCh)
+	go g.broadcastShredsToNode(ofrNodeCh)
 
 	if g.noValidator {
 		go g.sendAliveMessages()
 	} else {
-		go g.nl.Recv(node2BDNCh)
-		go g.broadcastShredsToBDN(node2BDNCh)
+		go g.nl.Recv(node2OFRCh)
+		go g.broadcastShredsToOFR(node2OFRCh)
 	}
 }
 
@@ -207,20 +207,20 @@ func (g *Gateway) sendAliveMessages() {
 	defer ticker.Stop()
 
 	for {
-		if err := g.send2BDNFd.UnsafeWrite([]byte(solana.AliveMsg), g.bdnUDPAddr.SockAddr); err != nil {
-			g.lg.Errorf("sendAliveMessages: write to UDP: %v", err)
+		if g.ofrUDPAddr != nil {
+			if err := g.send2OFRFd.UnsafeWrite(solana.AliveMsg, g.ofrUDPAddr.SockAddr); err != nil {
+				g.lg.Errorf("sendAliveMessages: write to UDP: %v", err)
+			}
 		}
 
 		<-ticker.C
 	}
 }
 
-func (g *Gateway) receiveShredsFromBDN(broadcastCh chan *[]byte) {
-	var done = g.ctx.Done()
-
+func (g *Gateway) receiveShredsFromOFR(broadcastCh chan *[]byte) {
 	for i := 0; ; i++ {
 		select {
-		case <-done:
+		case <-g.ctx.Done():
 			return
 		default:
 		}
@@ -233,14 +233,14 @@ func (g *Gateway) receiveShredsFromBDN(broadcastCh chan *[]byte) {
 			continue
 		}
 
-		if g.bdnUDPAddr == nil {
-			g.lg.Warnf("bdnUDPAddr is nil")
+		if g.ofrUDPAddr == nil {
+			g.lg.Warnf("ofrUDPAddr is nil")
 			g.pool.Put(buf)
 			continue
 		}
 
 		// only check if IPs are equal due to Relays use different ports to send are recv traffic
-		if addr.NetipAddr != g.bdnUDPAddr.NetipAddr {
+		if addr.NetipAddr != g.ofrUDPAddr.NetipAddr {
 			g.pool.Put(buf)
 			continue
 		}
@@ -249,14 +249,14 @@ func (g *Gateway) receiveShredsFromBDN(broadcastCh chan *[]byte) {
 
 		shred, err := solana.ParseShredPartial(*buf)
 		if err != nil {
-			g.lg.Errorf("bdn: failed to analyze packet from bdn: %s", err)
+			g.lg.Errorf("ofr: failed to analyze packet from ofr: %s", err)
 			g.pool.Put(buf)
 			continue
 		}
 
 		g.lg.Tracef("gateway: recv shred, slot: %d, index: %d, from: %s", shred.Slot, shred.Index, addr)
 		if i == 1e5 {
-			g.lg.Debugf("health: receiveShredsFromBDN 100K: broadcast buf: %d", len(broadcastCh))
+			g.lg.Debugf("health: receiveShredsFromOFR 100K: broadcast buf: %d", len(broadcastCh))
 			i = 0
 		}
 
@@ -278,7 +278,7 @@ func (g *Gateway) receiveShredsFromBDN(broadcastCh chan *[]byte) {
 		case broadcastCh <- buf:
 		default:
 			g.pool.Put(buf)
-			g.lg.Warn("gateway: forward shred from bdn: channel is full")
+			g.lg.Warn("gateway: forward shred from ofr: channel is full")
 		}
 	}
 }
@@ -305,25 +305,25 @@ func (g *Gateway) broadcastShredsToNode(ch <-chan *[]byte) {
 	}
 }
 
-func (g *Gateway) broadcastShredsToBDN(ch <-chan *packet.SniffPacket) {
+func (g *Gateway) broadcastShredsToOFR(ch <-chan *packet.SniffPacket) {
 	for pkt := range ch {
-		g.bdnUDPAddrMx.RLock()
-		bdnUDPAddr := g.bdnUDPAddr
-		g.bdnUDPAddrMx.RUnlock()
+		g.ofrUDPAddrMx.RLock()
+		ofrUDPAddr := g.ofrUDPAddr
+		g.ofrUDPAddrMx.RUnlock()
 
-		if bdnUDPAddr == nil {
+		if ofrUDPAddr == nil {
 			pkt.Free()
 			continue // we are not yet registered
 		}
 
-		err := g.send2BDNFd.UnsafeWrite(pkt.Payload, g.bdnUDPAddr.SockAddr)
+		err := g.send2OFRFd.UnsafeWrite(pkt.Payload, g.ofrUDPAddr.SockAddr)
 		if err != nil {
-			g.lg.Errorf("broadcast to BDN: write to UDP addr: %s: %s", udp.SockaddrString(g.bdnUDPAddr.SockAddr), err)
+			g.lg.Errorf("broadcast to OFR: write to UDP addr: %s: %s", udp.SockaddrString(g.ofrUDPAddr.SockAddr), err)
 		}
 
-		if !g.extraBroadcastFromBDNOnly {
+		if !g.extraBroadcastFromOFROnly {
 			for _, addr := range g.extraBroadcastAddrs {
-				err = g.send2BDNFd.UnsafeWrite(pkt.Payload, addr)
+				err = g.send2OFRFd.UnsafeWrite(pkt.Payload, addr)
 				if err != nil {
 					g.lg.Errorf("broadcast to extra addr: write to UDP: %s: %s", udp.SockaddrString(addr), err)
 				}
@@ -345,11 +345,11 @@ func (g *Gateway) reRegister() {
 		case <-g.ctx.Done():
 			return
 		case <-g.noTraffic.C:
-			g.lg.Infof("no traffic from BDN: re-registering gateway...")
+			g.lg.Infof("no traffic from OFR: re-registering gateway...")
 
 			addr, err := g.Register()
 			if err != nil {
-				g.lg.Errorf("no traffic from BDN: re-register: %s", err)
+				g.lg.Errorf("no traffic from OFR: re-register: %s", err)
 
 				if wait < time.Hour {
 					wait = 2 * wait
@@ -367,7 +367,7 @@ func (g *Gateway) reRegister() {
 			// if the callback takes longer than the ticker duration
 			g.noTraffic.Reset(noTrafficThreshold)
 
-			g.lg.Infof("no traffic from BDN: gateway successfully re-registered, udp addr: %s", udp.SockaddrString(addr))
+			g.lg.Infof("no traffic from OFR: gateway successfully re-registered, udp addr: %s", udp.SockaddrString(addr))
 		}
 	}
 }

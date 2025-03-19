@@ -7,7 +7,7 @@ import (
 	"net/netip"
 	"sync"
 
-	"github.com/bloXroute-Labs/solana-gateway/pkg/bdn"
+	"github.com/bloXroute-Labs/solana-gateway/pkg/ofr"
 	"github.com/bloXroute-Labs/solana-gateway/pkg/cache"
 	"github.com/bloXroute-Labs/solana-gateway/pkg/logger"
 	"github.com/bloXroute-Labs/solana-gateway/pkg/packet"
@@ -21,7 +21,7 @@ type NetworkListener struct {
 	ctx          context.Context
 	lg           logger.Logger
 	cache        *cache.AlterKey
-	stats        *bdn.Stats
+	stats        *ofr.Stats
 	sniffers     []*packet.Sniffer
 	localAddr    netip.Addr
 	netInterface string
@@ -42,7 +42,7 @@ func (pd *portData) LogPrefix() string {
 	return fmt.Sprintf("%s port %d", dir, pd.port)
 }
 
-func NewNetworkListener(ctx context.Context, lg logger.Logger, cache *cache.AlterKey, stats *bdn.Stats, netInterface string, inPorts, outPorts []int) (*NetworkListener, error) {
+func NewNetworkListener(ctx context.Context, lg logger.Logger, cache *cache.AlterKey, stats *ofr.Stats, netInterface string, inPorts, outPorts []int) (*NetworkListener, error) {
 	nl := &NetworkListener{
 		ctx:          ctx,
 		lg:           lg,

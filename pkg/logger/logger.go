@@ -21,7 +21,7 @@ type Config struct {
 
 func DefaultConfig() *Config {
 	return &Config{
-		AppName:    "solana-bdn",
+		AppName:    "ofr",
 		Level:      "info",
 		FileLevel:  "trace",
 		MaxSize:    100,

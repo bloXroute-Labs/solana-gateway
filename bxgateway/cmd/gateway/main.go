@@ -21,7 +21,7 @@ import (
 	"github.com/bloXroute-Labs/solana-gateway/bxgateway/internal/gateway"
 	"github.com/bloXroute-Labs/solana-gateway/bxgateway/internal/http_server"
 	"github.com/bloXroute-Labs/solana-gateway/bxgateway/internal/netlisten"
-	"github.com/bloXroute-Labs/solana-gateway/pkg/bdn"
+	"github.com/bloXroute-Labs/solana-gateway/pkg/ofr"
 	"github.com/bloXroute-Labs/solana-gateway/pkg/cache"
 	"github.com/bloXroute-Labs/solana-gateway/pkg/logger"
 	pb "github.com/bloXroute-Labs/solana-gateway/pkg/protobuf"
@@ -42,7 +42,7 @@ const (
 	// environment variable to run gateway in passive mode
 	//
 	// "passive mode" means to be passive in relation to the solana-validator
-	// it only forwards [Solana -> BDN] traffic, but not [BDN -> Solana]
+	// it only forwards [Solana -> OFR] traffic, but not [OFR -> Solana]
 	passiveModeEnv        = "SG_MODE_PASSIVE"
 	gatewayVersionEnv     = "SG_VERSION"
 	numOfTraderAPISToSend = 2
@@ -57,13 +57,13 @@ const (
 	solanaTVUBroadcastPortFlag = "tvu-broadcast-port"
 	solanaTVUPortFlag          = "tvu-port"
 	sniffInterfaceFlag         = "network-interface"
-	bdnHostFlag                = "bdn-host"
-	bdnPortFlag                = "bdn-port"
-	bdnGRPCPortFlag            = "bdn-grpc-port"
+	ofrHostFlag                = "ofr-host"
+	ofrPortFlag                = "ofr-port"
+	ofrGRPCPortFlag            = "ofr-grpc-port"
 	udpServerPortFlag          = "port"
 	authHeaderFlag             = "auth-header"
 	broadcastAddressesFlag     = "broadcast-addresses"
-	broadcastFromBdnOnlyFlag   = "broadcast-from-bdn-only"
+	broadcastFromOfrOnlyFlag   = "broadcast-from-ofr-only"
 	noValidatorFlag            = "no-validator"
 	stakedNodeFlag             = "staked-node"
 	runHttpServerFlag          = "run-http-server"
@@ -83,13 +83,13 @@ func main() {
 			&cli.IntFlag{Name: solanaTVUBroadcastPortFlag, Value: 0, Usage: "Solana Validator TVU Broadcast Port"},
 			&cli.IntFlag{Name: solanaTVUPortFlag, Value: 8001, Usage: "Solana Validator TVU Port"},
 			&cli.StringFlag{Name: sniffInterfaceFlag, Usage: "Outbound network interface"},
-			&cli.StringFlag{Name: bdnHostFlag, Required: true, Usage: "Closest bdn relay's host, see https://docs.bloxroute.com/solana/solana-bdn/startup-arguments"},
-			&cli.IntFlag{Name: bdnPortFlag, Value: 8888, Usage: "DEPRECATED - kept to not to crash existing configurations"},
-			&cli.IntFlag{Name: bdnGRPCPortFlag, Value: 5005, Usage: "Closest bdn relay's GRPC port"},
-			&cli.IntFlag{Name: udpServerPortFlag, Value: 18888, Usage: "Localhost UDP port used to run a server for communication with bdn - should be open for inbound and outbound traffic"},
+			&cli.StringFlag{Name: ofrHostFlag, Aliases: []string{"bdn-host"}, Required: true, Usage: "Closest ofr relay's host, see https://docs.bloxroute.com/solana/solana-bdn/startup-arguments"},
+			&cli.IntFlag{Name: ofrPortFlag, Aliases: []string{"bdn-port"}, Value: 8888, Usage: "DEPRECATED - kept to not to crash existing configurations"},
+			&cli.IntFlag{Name: ofrGRPCPortFlag, Aliases: []string{"bdn-grpc-port"}, Value: 5005, Usage: "Closest ofr relay's GRPC port"},
+			&cli.IntFlag{Name: udpServerPortFlag, Value: 18888, Usage: "Localhost UDP port used to run a server for communication with ofr - should be open for inbound and outbound traffic"},
 			&cli.StringFlag{Name: authHeaderFlag, Required: true, Usage: "Auth header issued by bloXroute"},
-			&cli.StringSliceFlag{Name: broadcastAddressesFlag, Usage: "Sets extra addresses to send shreds received from BDN and Solana Node"},
-			&cli.BoolFlag{Name: broadcastFromBdnOnlyFlag, Usage: "Do not send traffic from Solana Node to extra addresses specified with --broadcast-addresses"},
+			&cli.StringSliceFlag{Name: broadcastAddressesFlag, Usage: "Sets extra addresses to send shreds received from OFR and Solana Node"},
+			&cli.BoolFlag{Name: broadcastFromOfrOnlyFlag, Aliases: []string{"broadcast-from-bdn-only"}, Usage: "Do not send traffic from Solana Node to extra addresses specified with --broadcast-addresses"},
 			&cli.BoolFlag{Name: noValidatorFlag, Value: false, Usage: "Run gw without node, only for elite/ultra accounts"},
 			&cli.BoolFlag{Name: stakedNodeFlag, Value: false, Usage: "Run as a stacked node"},
 			&cli.BoolFlag{Name: runHttpServerFlag, Value: false, Usage: "Run http server to submit txs to trader api"},
@@ -106,12 +106,12 @@ func main() {
 				c.Int(solanaTVUBroadcastPortFlag),
 				c.Int(solanaTVUPortFlag),
 				c.String(sniffInterfaceFlag),
-				c.String(bdnHostFlag),
-				c.Int(bdnGRPCPortFlag),
+				c.String(ofrHostFlag),
+				c.Int(ofrGRPCPortFlag),
 				c.Int(udpServerPortFlag),
 				c.String(authHeaderFlag),
 				c.StringSlice(broadcastAddressesFlag),
-				c.Bool(broadcastFromBdnOnlyFlag),
+				c.Bool(broadcastFromOfrOnlyFlag),
 				c.Bool(noValidatorFlag),
 				c.Bool(stakedNodeFlag),
 				c.Bool(runHttpServerFlag),
@@ -136,12 +136,12 @@ func run(
 	solanaTVUBroadcastPort int,
 	solanaTVUPort int,
 	sniffInterface string,
-	bdnHost string,
-	bdnGRPCPort int,
+	ofrHost string,
+	ofrGRPCPort int,
 	udpServerPort int,
 	authHeader string,
 	extraBroadcastAddrs []string,
-	extraBroadcastFromBDNOnly bool,
+	extraBroadcastFromOFROnly bool,
 	noValidator bool,
 	stakedNode bool,
 	runHttpServer bool,
@@ -207,6 +207,8 @@ func run(
 		gatewayModePassive = os.Getenv(passiveModeEnv) != ""
 	)
 
+	defer cancel()
+
 	lg.Infof("dynamic port range %d-%d", dynamicPortRangeMin, dynamicPortRangeMax)
 
 	signal.Notify(sig, os.Interrupt)
@@ -224,7 +226,7 @@ func run(
 	}
 
 	var alterKeyCache = cache.NewAlterKey(time.Second * 5)
-	var stats = bdn.NewStats(lg, time.Minute)
+	var stats = ofr.NewStats(lg, time.Minute)
 
 	var nl *netlisten.NetworkListener
 	// assign net listener only when running with validator
@@ -251,7 +253,7 @@ func run(
 		}
 	}
 
-	conn, err := grpc.NewClient(fmt.Sprintf("%s:%d", bdnHost, bdnGRPCPort), grpc.WithTransportCredentials(insecure.NewCredentials()))
+	conn, err := grpc.NewClient(fmt.Sprintf("%s:%d", ofrHost, ofrGRPCPort), grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
 		lg.Errorf("grpc dial: %s", err)
 		return err
@@ -264,13 +266,13 @@ func run(
 		return err
 	}
 
-	registrar := gateway.NewBDNRegistrar(ctx, pb.NewRelayClient(conn), authHeader, version, serverFd.Port)
+	registrar := gateway.NewOFRRegistrar(ctx, pb.NewRelayClient(conn), authHeader, version, serverFd.Port)
 
 	// set gateway options
 	var opts = make([]gateway.Option, 0)
 	if gatewayModePassive {
 		opts = append(opts, gateway.PassiveMode())
-		lg.Warn("gateway is starting in passive mode (packets from BDN are not forwarded to validator)")
+		lg.Warn("gateway is starting in passive mode (packets from OFR are not forwarded to validator)")
 	}
 
 	if noValidator {
@@ -279,7 +281,7 @@ func run(
 	}
 
 	if len(extraBroadcastAddrs) != 0 {
-		opt, err := gateway.WithBroadcastAddrs(extraBroadcastAddrs, extraBroadcastFromBDNOnly)
+		opt, err := gateway.WithBroadcastAddrs(extraBroadcastAddrs, extraBroadcastFromOFROnly)
 		if err != nil {
 			lg.Errorf("set broadcast addrs: %s", err)
 			return err
