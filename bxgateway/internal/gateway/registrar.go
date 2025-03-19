@@ -10,7 +10,7 @@ type Registrar interface {
 	Register() (string, error)
 }
 
-type bdnRegistrar struct {
+type ofrRegistrar struct {
 	ctx        context.Context
 	client     proto.RelayClient
 	header     string
@@ -18,8 +18,8 @@ type bdnRegistrar struct {
 	serverPort int64
 }
 
-func NewBDNRegistrar(ctx context.Context, client proto.RelayClient, header, version string, serverPort int64) Registrar {
-	return &bdnRegistrar{
+func NewOFRRegistrar(ctx context.Context, client proto.RelayClient, header, version string, serverPort int64) Registrar {
+	return &ofrRegistrar{
 		ctx:        ctx,
 		client:     client,
 		header:     header,
@@ -29,7 +29,7 @@ func NewBDNRegistrar(ctx context.Context, client proto.RelayClient, header, vers
 }
 
 // Register calls register endpoint on relay and returns relay's udp address to send and recv shreds
-func (r *bdnRegistrar) Register() (string, error) {
+func (r *ofrRegistrar) Register() (string, error) {
 	rsp, err := r.client.Register(r.ctx, &proto.RegisterRequest{
 		AuthHeader: r.header,
 		Version:    r.version,
