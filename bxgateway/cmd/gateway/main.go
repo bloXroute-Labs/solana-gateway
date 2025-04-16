@@ -21,9 +21,9 @@ import (
 	"github.com/bloXroute-Labs/solana-gateway/bxgateway/internal/gateway"
 	"github.com/bloXroute-Labs/solana-gateway/bxgateway/internal/http_server"
 	"github.com/bloXroute-Labs/solana-gateway/bxgateway/internal/netlisten"
-	"github.com/bloXroute-Labs/solana-gateway/pkg/ofr"
 	"github.com/bloXroute-Labs/solana-gateway/pkg/cache"
 	"github.com/bloXroute-Labs/solana-gateway/pkg/logger"
+	"github.com/bloXroute-Labs/solana-gateway/pkg/ofr"
 	pb "github.com/bloXroute-Labs/solana-gateway/pkg/protobuf"
 	"github.com/bloXroute-Labs/solana-gateway/pkg/udp"
 )
@@ -209,7 +209,7 @@ func run(
 
 	defer cancel()
 
-	lg.Infof("dynamic port range %d-%d", dynamicPortRangeMin, dynamicPortRangeMax)
+	lg.Debugf("dynamic port range %d-%d", dynamicPortRangeMin, dynamicPortRangeMax)
 
 	signal.Notify(sig, os.Interrupt)
 
