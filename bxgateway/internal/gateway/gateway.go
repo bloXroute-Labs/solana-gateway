@@ -137,6 +137,7 @@ func (g *Gateway) printUnseenStats() {
 
 		if totalShreds == 0 {
 			g.lg.Infof("No shreds received")
+			continue
 		}
 
 		g.lg.Infof("Seen %.2f%% of shreds first from OFR", (float64(totalShredsSeenFromOFR)/float64(totalShreds))*100)
@@ -174,16 +175,11 @@ func (g *Gateway) Register() (syscall.Sockaddr, error) {
 }
 
 func (g *Gateway) Start() {
-	var (
-		ofrNodeCh  = make(chan *[]byte, 1e5)
-		node2OFRCh = make(chan *packet.SniffPacket, 1e5)
-	)
-
 	addr, err := g.Register()
 	if err != nil {
-		time.Sleep(time.Minute)
-
 		g.lg.Errorf("register gateway on startup: %s", err)
+
+		time.Sleep(time.Minute)
 
 		return
 	}
@@ -191,12 +187,15 @@ func (g *Gateway) Start() {
 	g.lg.Infof("gateway successfully registered, udp addr: %s", udp.SockaddrString(addr))
 
 	go g.reRegister()
+
+	ofrNodeCh := make(chan *[]byte, 1e5)
 	go g.receiveShredsFromOFR(ofrNodeCh)
 	go g.broadcastShredsToNode(ofrNodeCh)
 
 	if g.noValidator {
 		go g.sendAliveMessages()
 	} else {
+		node2OFRCh := make(chan *packet.SniffPacket, 1e5)
 		go g.nl.Recv(node2OFRCh)
 		go g.broadcastShredsToOFR(node2OFRCh)
 	}
@@ -254,7 +253,7 @@ func (g *Gateway) receiveShredsFromOFR(broadcastCh chan *[]byte) {
 			continue
 		}
 
-		g.lg.Tracef("gateway: recv shred, slot: %d, index: %d, from: %s", shred.Slot, shred.Index, addr)
+		g.lg.Tracef("gateway: recv shred, slot: %d, index: %d, from: %s", shred.Slot, shred.Index, addr.NetipAddr.String())
 		if i == 1e5 {
 			g.lg.Debugf("health: receiveShredsFromOFR 100K: broadcast buf: %d", len(broadcastCh))
 			i = 0
@@ -316,9 +315,9 @@ func (g *Gateway) broadcastShredsToOFR(ch <-chan *packet.SniffPacket) {
 			continue // we are not yet registered
 		}
 
-		err := g.send2OFRFd.UnsafeWrite(pkt.Payload, g.ofrUDPAddr.SockAddr)
+		err := g.send2OFRFd.UnsafeWrite(pkt.Payload, ofrUDPAddr.SockAddr)
 		if err != nil {
-			g.lg.Errorf("broadcast to OFR: write to UDP addr: %s: %s", udp.SockaddrString(g.ofrUDPAddr.SockAddr), err)
+			g.lg.Errorf("broadcast to OFR: write to UDP addr: %s: %s", udp.SockaddrString(ofrUDPAddr.SockAddr), err)
 		}
 
 		if !g.extraBroadcastFromOFROnly {

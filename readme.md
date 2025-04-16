@@ -26,7 +26,7 @@ You can choose either to either run locally or [Docker] (recommended). Refer to 
 
 ## Building the source
 
-Building gateway requires Go (version 1.23 or later). You can install it using your favourite package manager. Once
+Building gateway requires Go (version 1.24 or later). You can install it using your favourite package manager. Once
 the dependencies are installed, run:
 
 ```
