@@ -20,6 +20,7 @@ import (
 const (
 	sizeOfCommonShredHeader      = 83
 	sizeOfSignature              = 64
+	sizeOfParent                 = 85
 	sizeOfShredVariant           = 1
 	sizeOfShredSlot              = 8
 	sizeOfShredIndex             = 4
@@ -55,6 +56,9 @@ const (
 	shredCodeCmp = 0b01 << 6
 	shredDataCmp = 0b10 << 6
 )
+
+// see solana/ledger/src/blockstore.rs - MAX_DATA_SHREDS_PER_SLOT
+const maxDataShredsPerSlot = 32768
 
 var AliveMsg = []byte("alive")
 
@@ -187,7 +191,7 @@ func ParseShred(s []byte) (*Shred, error) {
 }
 
 func ParseShredPartial(s []byte) (*PartialShred, error) {
-	if len(s) < sizeOfSignature {
+	if len(s) < sizeOfParent {
 		return nil, fmt.Errorf("shred size too small: %d", len(s))
 	}
 
@@ -199,14 +203,32 @@ func ParseShredPartial(s []byte) (*PartialShred, error) {
 	if err := validateShredSize(len(s), shredVariant); err != nil {
 		return nil, err
 	}
+	index := binary.LittleEndian.Uint32(
+		s[sizeOfSignature+sizeOfShredVariant+sizeOfShredSlot : sizeOfSignature+sizeOfShredVariant+sizeOfShredSlot+sizeOfShredIndex])
+
+	if index > maxDataShredsPerSlot {
+		return nil, fmt.Errorf("shred index is too big: %d", index)
+	}
+
+	slot := binary.LittleEndian.Uint64(
+		s[sizeOfSignature+sizeOfShredVariant : sizeOfSignature+sizeOfShredVariant+sizeOfShredSlot])
+
+	if shredVariant.IsData() {
+		parentOffset := binary.LittleEndian.Uint16(s[sizeOfCommonShredHeader:sizeOfParent])
+		if slot < uint64(parentOffset) {
+			return nil, fmt.Errorf("shred slot %d is smaller than parent_offset %d", slot, parentOffset)
+		}
+		actualParentSlot := slot - uint64(parentOffset)
+		if slot < actualParentSlot {
+			return nil, fmt.Errorf("shred slot %v is smaller than parent %v", slot, actualParentSlot)
+		}
+	}
 
 	return &PartialShred{
 		Raw:     s,
 		Variant: shredVariant,
-		Slot: binary.LittleEndian.Uint64(
-			s[sizeOfSignature+sizeOfShredVariant : sizeOfSignature+sizeOfShredVariant+sizeOfShredSlot]),
-		Index: binary.LittleEndian.Uint32(
-			s[sizeOfSignature+sizeOfShredVariant+sizeOfShredSlot : sizeOfSignature+sizeOfShredVariant+sizeOfShredSlot+sizeOfShredIndex]),
+		Slot:    slot,
+		Index:   index,
 	}, nil
 }
 

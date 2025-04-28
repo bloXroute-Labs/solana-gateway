@@ -7,7 +7,8 @@ import (
 )
 
 type Registrar interface {
-	Register() (string, error)
+	Register() (*proto.RegisterResponse, error)
+	RefreshToken(token string) (*proto.RefreshTokenResponse, error)
 }
 
 type ofrRegistrar struct {
@@ -29,7 +30,7 @@ func NewOFRRegistrar(ctx context.Context, client proto.RelayClient, header, vers
 }
 
 // Register calls register endpoint on relay and returns relay's udp address to send and recv shreds
-func (r *ofrRegistrar) Register() (string, error) {
+func (r *ofrRegistrar) Register() (*proto.RegisterResponse, error) {
 	rsp, err := r.client.Register(r.ctx, &proto.RegisterRequest{
 		AuthHeader: r.header,
 		Version:    r.version,
@@ -37,8 +38,21 @@ func (r *ofrRegistrar) Register() (string, error) {
 	})
 
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 
-	return rsp.GetUdpAddress(), nil
+	return rsp, nil
+}
+
+func (r *ofrRegistrar) RefreshToken(token string) (*proto.RefreshTokenResponse, error) {
+	rsp, err := r.client.RefreshToken(r.ctx, &proto.RefreshTokenRequest{
+		AuthHeader: r.header,
+		JwtToken:   token,
+	})
+
+	if err != nil {
+		return nil, err
+	}
+
+	return rsp, nil
 }
