@@ -21,6 +21,7 @@ import (
 	"github.com/bloXroute-Labs/solana-gateway/bxgateway/internal/gateway"
 	"github.com/bloXroute-Labs/solana-gateway/bxgateway/internal/http_server"
 	"github.com/bloXroute-Labs/solana-gateway/bxgateway/internal/netlisten"
+	"github.com/bloXroute-Labs/solana-gateway/bxgateway/internal/txfwd"
 	"github.com/bloXroute-Labs/solana-gateway/pkg/cache"
 	"github.com/bloXroute-Labs/solana-gateway/pkg/logger"
 	"github.com/bloXroute-Labs/solana-gateway/pkg/ofr"
@@ -189,14 +190,14 @@ func run(
 	if err != nil {
 		log.Fatalln("init service logger:", err)
 	}
+
+	var gwopts = make([]gateway.Option, 0)
+
 	if runHttpServer {
-		httpServer := http_server.NewHTTPServer(lg, httpPort, numOfTraderAPISToSend, authHeader)
-		go func() {
-			err := httpServer.Start()
-			if err != nil {
-				lg.Errorf("error starting http server: %v", err)
-			}
-		}()
+		var bxfwd = txfwd.NewBxForwarder(context.Background(), lg)
+		var traderapifwd = txfwd.NewTraderAPIForwarder(lg, numOfTraderAPISToSend, authHeader)
+		gwopts = append(gwopts, gateway.WithTxForwarders(bxfwd, traderapifwd))
+		http_server.Run(lg, httpPort, bxfwd, traderapifwd)
 	}
 
 	defer closeLogger()
@@ -268,15 +269,13 @@ func run(
 
 	registrar := gateway.NewOFRRegistrar(ctx, pb.NewRelayClient(conn), authHeader, version, serverFd.Port)
 
-	// set gateway options
-	var opts = make([]gateway.Option, 0)
 	if gatewayModePassive {
-		opts = append(opts, gateway.PassiveMode())
+		gwopts = append(gwopts, gateway.PassiveMode())
 		lg.Warn("gateway is starting in passive mode (packets from OFR are not forwarded to validator)")
 	}
 
 	if noValidator {
-		opts = append(opts, gateway.WithoutSolanaNode())
+		gwopts = append(gwopts, gateway.WithoutSolanaNode())
 		lg.Info("gateway is starting without solana node connection")
 	}
 
@@ -287,11 +286,11 @@ func run(
 			return err
 		}
 
-		opts = append(opts, opt)
+		gwopts = append(gwopts, opt)
 		lg.Infof("gateway is starting with additional broadcast addrs: %v", extraBroadcastAddrs)
 	}
 
-	gw, err := gateway.New(ctx, lg, alterKeyCache, stats, nl, serverFd, fdset, solanaNodeTVUAddr, registrar, opts...)
+	gw, err := gateway.New(ctx, lg, alterKeyCache, stats, nl, serverFd, fdset, solanaNodeTVUAddr, registrar, gwopts...)
 	if err != nil {
 		lg.Errorf("init gateway: %s", err)
 		return err

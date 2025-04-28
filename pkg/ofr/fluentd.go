@@ -11,10 +11,10 @@ import (
 const (
 	fluentDTSFmt = "2006-01-02T15:04:05.000000"
 
-	fluentDShredStatsRecordType       = "SolanaBDNPerformance"
-	fluentDConnectedGatewayRecordType = "SolanaConnectedGateway"
-	fluentDShredStatsLogName          = "stats.solana_bdn_performance"
-	fluentDConnectedGatewayLogName    = "stats.solana_connected_gateway"
+	fluentDShredStatsRecordType       = "OFRPerformance"
+	fluentDConnectedGatewayRecordType = "OFRConnectedGateway"
+	fluentDShredStatsLogName          = "stats.ofr_performance"
+	fluentDConnectedGatewayLogName    = "stats.ofr_connected_gateway"
 )
 
 // Record represents a bloxroute style stat type record

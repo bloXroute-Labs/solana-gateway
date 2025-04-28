@@ -3,7 +3,7 @@ package logger
 import (
 	"fmt"
 
-	log "github.com/bloXroute-Labs/gateway/v2/logger"
+	log "github.com/bloXroute-Labs/bxcommon-go/logger"
 )
 
 type Config struct {

@@ -8,7 +8,9 @@ import (
 	"time"
 
 	"github.com/bloXroute-Labs/solana-gateway/bxgateway/internal/netlisten"
+	"github.com/bloXroute-Labs/solana-gateway/bxgateway/internal/txfwd"
 	"github.com/bloXroute-Labs/solana-gateway/pkg/cache"
+	"github.com/bloXroute-Labs/solana-gateway/pkg/jwt"
 	"github.com/bloXroute-Labs/solana-gateway/pkg/logger"
 	"github.com/bloXroute-Labs/solana-gateway/pkg/ofr"
 	"github.com/bloXroute-Labs/solana-gateway/pkg/packet"
@@ -26,25 +28,28 @@ const (
 )
 
 type Gateway struct {
-	ctx           context.Context
-	lg            logger.Logger
-	cache         *cache.AlterKey
-	stats         *ofr.Stats
-	nl            *netlisten.NetworkListener
-	pool          *sync.Pool
-	serverFd      *udp.FDConn // fd receiving traffic from ofr
-	send2OFRFd    *udp.FDConn // fd sending traffic to ofr
-	send2NodeFd   *udp.FDConn // fd sending traffic to node
-	solanaTVUAddr syscall.Sockaddr
-	ofrUDPAddrMx  *sync.RWMutex
-	ofrUDPAddr    *udp.Addr
-	registrar     Registrar
-	noTraffic     *time.Ticker
-
+	ctx                       context.Context
+	lg                        logger.Logger
+	cache                     *cache.AlterKey
+	stats                     *ofr.Stats
+	nl                        *netlisten.NetworkListener
+	pool                      *sync.Pool
+	serverFd                  *udp.FDConn // fd receiving traffic from ofr
+	send2OFRFd                *udp.FDConn // fd sending traffic to ofr
+	send2NodeFd               *udp.FDConn // fd sending traffic to node
+	solanaTVUAddr             syscall.Sockaddr
+	ofrUDPAddrMx              *sync.RWMutex
+	ofrUDPAddr                *udp.Addr
+	registrar                 Registrar
+	noTrafficTicker           *time.Ticker
+	refreshJWTTicker          *time.Ticker
+	bxForwarder               *txfwd.BxForwarder
+	traderAPIFwd              *txfwd.TraderAPIForwarder
 	extraBroadcastAddrs       []syscall.Sockaddr // additional endpoints set via --broadcast-addresses
 	extraBroadcastFromOFROnly bool
 	noValidator               bool
 	passiveMode               bool
+	jwt                       bool
 }
 
 type Option func(*Gateway)
@@ -71,6 +76,14 @@ func WithBroadcastAddrs(addrs []string, ofrOnly bool) (Option, error) {
 	}, nil
 }
 
+func WithTxForwarders(bxForwarders *txfwd.BxForwarder, traderAPIFwd *txfwd.TraderAPIForwarder) Option {
+	return func(g *Gateway) {
+		g.jwt = true
+		g.bxForwarder = bxForwarders
+		g.traderAPIFwd = traderAPIFwd
+	}
+}
+
 func New(
 	ctx context.Context,
 	lg logger.Logger,
@@ -94,20 +107,21 @@ func New(
 	}
 
 	gw := &Gateway{
-		ctx:           ctx,
-		lg:            lg,
-		cache:         cache,
-		stats:         stats,
-		nl:            nl,
-		pool:          &sync.Pool{New: func() interface{} { s := make([]byte, udpShredSize); return &s }},
-		serverFd:      serverFd,
-		send2OFRFd:    snd2OFRFd,
-		send2NodeFd:   snd2NodeFd,
-		solanaTVUAddr: solanaTVUAddr,
-		ofrUDPAddrMx:  &sync.RWMutex{},
-		ofrUDPAddr:    nil, // this addr is returned from registration endpoint
-		passiveMode:   false,
-		registrar:     registrar,
+		ctx:              ctx,
+		lg:               lg,
+		cache:            cache,
+		stats:            stats,
+		nl:               nl,
+		pool:             &sync.Pool{New: func() interface{} { s := make([]byte, udpShredSize); return &s }},
+		serverFd:         serverFd,
+		send2OFRFd:       snd2OFRFd,
+		send2NodeFd:      snd2NodeFd,
+		solanaTVUAddr:    solanaTVUAddr,
+		ofrUDPAddrMx:     &sync.RWMutex{},
+		ofrUDPAddr:       nil, // this addr is returned from registration endpoint
+		passiveMode:      false,
+		registrar:        registrar,
+		refreshJWTTicker: stoppedTicker(), // will be reset if needed during registration
 	}
 
 	for _, o := range opts {
@@ -151,12 +165,12 @@ func (g *Gateway) Register() (syscall.Sockaddr, error) {
 	g.ofrUDPAddr = nil
 	g.ofrUDPAddrMx.Unlock()
 
-	udpAddr, err := g.registrar.Register()
+	rsp, err := g.registrar.Register()
 	if err != nil {
 		return nil, fmt.Errorf("register gateway: %s", err)
 	}
 
-	sockAddr, err := udp.SockAddrFromUDPString(udpAddr)
+	sockAddr, err := udp.SockAddrFromUDPString(rsp.GetUdpAddress())
 	if err != nil {
 		return nil, fmt.Errorf("resolve OFR UDP address: %s", err)
 	}
@@ -167,9 +181,25 @@ func (g *Gateway) Register() (syscall.Sockaddr, error) {
 	}
 
 	g.ofrUDPAddrMx.Lock()
-	defer g.ofrUDPAddrMx.Unlock()
-
 	g.ofrUDPAddr = addr
+	g.ofrUDPAddrMx.Unlock()
+
+	var jwtToken = rsp.GetJwtToken()
+
+	if g.bxForwarder != nil {
+		go g.bxForwarder.Update(jwtToken, rsp.GetTxPropagationConfig())
+	}
+
+	if g.traderAPIFwd != nil {
+		go g.traderAPIFwd.Update(rsp.GetTxPropagationConfig())
+	}
+
+	if jwtToken != "" {
+		err = g.resetRefreshJWTTicker(jwtToken)
+		if err != nil {
+			g.lg.Errorf("failed to reset refresh JWT ticker: %s", err)
+		}
+	}
 
 	return sockAddr, nil
 }
@@ -244,7 +274,7 @@ func (g *Gateway) receiveShredsFromOFR(broadcastCh chan *[]byte) {
 			continue
 		}
 
-		g.noTraffic.Reset(noTrafficThreshold)
+		g.noTrafficTicker.Reset(noTrafficThreshold)
 
 		shred, err := solana.ParseShredPartial(*buf)
 		if err != nil {
@@ -337,13 +367,13 @@ func (g *Gateway) reRegister() {
 	wait := noTrafficThreshold
 
 	// start monitoring if we need to register again
-	g.noTraffic = time.NewTicker(noTrafficThreshold)
+	g.noTrafficTicker = time.NewTicker(noTrafficThreshold)
 
 	for {
 		select {
 		case <-g.ctx.Done():
 			return
-		case <-g.noTraffic.C:
+		case <-g.noTrafficTicker.C:
 			g.lg.Infof("no traffic from OFR: re-registering gateway...")
 
 			addr, err := g.Register()
@@ -354,7 +384,7 @@ func (g *Gateway) reRegister() {
 					wait = 2 * wait
 				}
 
-				g.noTraffic.Reset(wait)
+				g.noTrafficTicker.Reset(wait)
 
 				continue
 			}
@@ -364,9 +394,58 @@ func (g *Gateway) reRegister() {
 			// reset the ticker after the callback is called
 			// to avoid calling the callback multiple times
 			// if the callback takes longer than the ticker duration
-			g.noTraffic.Reset(noTrafficThreshold)
+			g.noTrafficTicker.Reset(noTrafficThreshold)
 
 			g.lg.Infof("no traffic from OFR: gateway successfully re-registered, udp addr: %s", udp.SockaddrString(addr))
+		case <-g.refreshJWTTicker.C:
+			g.lg.Infof("refreshing JWT Token")
+			rsp, err := g.registrar.RefreshToken(g.bxForwarder.Token())
+			if err != nil {
+				g.lg.Errorf("failed to refresh token: %s, trying to re-register", err)
+
+				addr, err := g.Register()
+				if err != nil {
+					g.lg.Errorf("failed to re-register due to token refresh error: %s", err)
+					continue
+				}
+
+				g.noTrafficTicker.Reset(noTrafficThreshold)
+				g.lg.Infof("gateway successfully re-registered, udp addr: %s", udp.SockaddrString(addr))
+				continue
+			}
+
+			g.bxForwarder.UpdateToken(rsp.GetJwtToken())
+			err = g.resetRefreshJWTTicker(rsp.GetJwtToken())
+			if err != nil {
+				g.lg.Errorf("failed to reset refresh JWT ticker: %s", err)
+			}
 		}
 	}
+}
+
+func (g *Gateway) resetRefreshJWTTicker(jwtToken string) error {
+	if !g.jwt { // no need to reset ticker if JWT is not used
+		return nil
+	}
+
+	token, err := jwt.ParseJWT(jwtToken)
+	if err != nil {
+		g.lg.Warnf("failed to parse JWT: %s %s", jwtToken, err)
+		return fmt.Errorf("failed to parse JWT: %s", err)
+	}
+
+	exp, err := jwt.GetExpirationTimeFromJWT(token)
+	if err != nil {
+		return fmt.Errorf("failed to get expiration time from JWT: %s", err)
+	}
+
+	g.refreshJWTTicker.Reset(time.Until(exp) - time.Minute)
+	return nil
+}
+
+// stoppedTicker returns a ticker that is stopped immediately, but can be reset if/when needed
+func stoppedTicker() *time.Ticker {
+	ticker := time.NewTicker(time.Second)
+	ticker.Stop()
+	return ticker
 }
