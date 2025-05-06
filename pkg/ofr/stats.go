@@ -80,18 +80,30 @@ type Stats struct {
 	firstShredRecorder   *firstShredRecorder
 
 	flushUnseenShredsChan chan *ShredsBySource
+	regions               sync.Map
+}
+
+type nodeInfo struct {
+	addr     netip.Addr
+	nodeType string
 }
 
 type (
+	shredsAndInfo struct {
+		shreds   int
+		nodeType string
+	}
+
 	shredsBySrcRecorder struct {
-		ch chan netip.Addr
-		mp map[netip.Addr]int // addr: num_received_shreds
+		ch chan nodeInfo
+		mp map[netip.Addr]*shredsAndInfo // addr: shredsInfo
 		mx sync.Mutex
 	}
 
 	ShredsBySrcRecord struct {
-		Src    string
-		Shreds int
+		Src      string
+		Shreds   int
+		NodeType string
 	}
 )
 
@@ -108,6 +120,16 @@ type (
 		slot  uint64
 		index uint32
 		typ   string
+	}
+
+	logEntry struct {
+		source              string
+		firstSeenShreds     int
+		totalShreds         int
+		firstSeenPercentage float64
+		kpi                 float64
+		nodeType            string
+		regions             string
 	}
 )
 
@@ -164,8 +186,13 @@ func NewStats(lg logger.Logger, timeout time.Duration, opts ...StatsOption) *Sta
 	return st
 }
 
+func (s *Stats) AddRegions(addr string, regions map[string]struct{}) {
+	s.regions.Store(addr, regions)
+}
+
 func (s *Stats) logStats(totalShreds *ShredsBySource, unseenShreds *ShredsBySource) {
 	var totalUnseenShreds int
+	logEntries := make([]logEntry, 0)
 	for _, unseen := range unseenShreds.Stats {
 		totalUnseenShreds += unseen.Shreds
 	}
@@ -189,10 +216,33 @@ func (s *Stats) logStats(totalShreds *ShredsBySource, unseenShreds *ShredsBySour
 		if total.Shreds > 0 {
 			kpi = float64(unseenCount) / float64(total.Shreds)
 		}
-
-		s.lg.Infof("%s, total shreds: %d, first seen shreds: %d (%.2f%%), kpi: %.2f",
-			total.Src, total.Shreds, unseenCount, firstSeenPercentage, kpi)
+		logEntries = append(logEntries, logEntry{source: total.Src, firstSeenShreds: unseenCount, totalShreds: total.Shreds,
+			firstSeenPercentage: firstSeenPercentage, kpi: kpi, nodeType: total.NodeType, regions: s.mapKeysToString(total.Src, &s.regions)})
 	}
+	sort.Slice(logEntries, func(i, j int) bool {
+		return logEntries[i].firstSeenShreds > logEntries[j].firstSeenShreds
+	})
+	for _, entry := range logEntries {
+		s.lg.Infof("%-16s %-7s first seen shreds: %-6d (%-5.2f%%) total shreds: %-6d kpi: %-4.2f regions: %s", entry.source, entry.nodeType, entry.firstSeenShreds, entry.firstSeenPercentage,
+			entry.totalShreds, entry.kpi, entry.regions)
+	}
+}
+
+func (s *Stats) mapKeysToString(addr string, m *sync.Map) string {
+	v, ok := m.Load(addr)
+	if !ok {
+		return ""
+	}
+	regions, ok := v.(map[string]struct{})
+	if !ok {
+		return ""
+	}
+	keys := make([]string, 0, len(regions))
+	for k := range regions {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return strings.Join(keys, ", ")
 }
 
 type StatsOption func(*Stats)
@@ -203,10 +253,12 @@ func StatsWithFluentD(fd *FluentD) StatsOption {
 	}
 }
 
-func (s *Stats) RecordNewShred(src netip.Addr) { s.totalShredsRecorder.record(src) }
+func (s *Stats) RecordNewShred(src netip.Addr, nodeType string) {
+	s.totalShredsRecorder.record(src, nodeType)
+}
 
-func (s *Stats) RecordUnseenShred(src netip.Addr, shred *solana.PartialShred) {
-	s.unseenShredsRecorder.record(src)
+func (s *Stats) RecordUnseenShred(src netip.Addr, shred *solana.PartialShred, nodeType string) {
+	s.unseenShredsRecorder.record(src, nodeType)
 	s.firstShredRecorder.record(src, shred)
 }
 
@@ -225,8 +277,8 @@ func (s *Stats) RecvFlushUnseenShreds() chan *ShredsBySource {
 
 func newShredsBySrcRecorder() *shredsBySrcRecorder {
 	rec := &shredsBySrcRecorder{
-		ch: make(chan netip.Addr, shredsRecorderChanBuf),
-		mp: make(map[netip.Addr]int),
+		ch: make(chan nodeInfo, shredsRecorderChanBuf),
+		mp: make(map[netip.Addr]*shredsAndInfo),
 	}
 
 	go rec.run()
@@ -289,22 +341,20 @@ func (r *firstShredRecorder) clean() {
 	r.mx.Unlock()
 }
 
-func (r *shredsBySrcRecorder) record(src netip.Addr) {
+func (r *shredsBySrcRecorder) record(src netip.Addr, nodeType string) {
 	select {
-	case r.ch <- src:
+	case r.ch <- nodeInfo{src, nodeType}:
 	default:
 	}
 }
 
 func (r *shredsBySrcRecorder) run() {
-	for src := range r.ch {
-		// key := src.String()
-
+	for info := range r.ch {
 		r.mx.Lock()
-		if v, ok := r.mp[src]; ok {
-			r.mp[src] = v + 1
+		if v, ok := r.mp[info.addr]; ok {
+			v.shreds += 1
 		} else {
-			r.mp[src] = 1
+			r.mp[info.addr] = &shredsAndInfo{1, info.nodeType}
 		}
 		r.mx.Unlock()
 	}
@@ -314,10 +364,11 @@ func (r *shredsBySrcRecorder) flush() *ShredsBySource {
 	stats := make([]*ShredsBySrcRecord, 0)
 
 	r.mx.Lock()
-	for src, shreds := range r.mp {
+	for src, info := range r.mp {
 		stats = append(stats, &ShredsBySrcRecord{
-			Src:    src.String(),
-			Shreds: shreds,
+			Src:      src.String(),
+			Shreds:   info.shreds,
+			NodeType: info.nodeType,
 		})
 
 		delete(r.mp, src)

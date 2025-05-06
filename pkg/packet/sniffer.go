@@ -185,11 +185,11 @@ func (s *Sniffer) DecodePacket(data []byte) (*SniffPacket, *netip.Addr, error) {
 		pkt.Payload = make([]byte, len(payload))
 	}
 
-	copy(pkt.Payload, payload)
-
 	// resize if allocated buf if larger than needed
 	// e.g. when the packet we got from the pool used to hold larger payload before
 	pkt.Payload = pkt.Payload[:len(payload)]
+	copy(pkt.Payload, payload)
+
 	pkt.SrcAddr = srcAddr
 	pkt.SrcHandle = s.Handle
 	return pkt, &srcAddr, nil

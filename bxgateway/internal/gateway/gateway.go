@@ -289,14 +289,14 @@ func (g *Gateway) receiveShredsFromOFR(broadcastCh chan *[]byte) {
 			i = 0
 		}
 
-		g.stats.RecordNewShred(addr.NetipAddr)
+		g.stats.RecordNewShred(addr.NetipAddr, "OFR")
 
 		if !g.cache.Set(solana.ShredKey(shred.Slot, shred.Index, shred.Variant)) {
 			g.pool.Put(buf)
 			continue
 		}
 
-		g.stats.RecordUnseenShred(addr.NetipAddr, shred)
+		g.stats.RecordUnseenShred(addr.NetipAddr, shred, "OFR")
 
 		if g.passiveMode {
 			g.pool.Put(buf)
