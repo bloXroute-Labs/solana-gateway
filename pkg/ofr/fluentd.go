@@ -13,8 +13,13 @@ const (
 
 	fluentDShredStatsRecordType       = "OFRPerformance"
 	fluentDConnectedGatewayRecordType = "OFRConnectedGateway"
-	fluentDShredStatsLogName          = "stats.ofr_performance"
-	fluentDConnectedGatewayLogName    = "stats.ofr_connected_gateway"
+
+	fluentDGatewayShreadPropapagationRecordType = "OFRGatewayShreadPropapagation"
+	fluentDRelayShreadPropapagationRecordType   = "OFRRelayShreadPropapagation"
+
+	fluentDShredStatsLogName       = "stats.ofr_performance"
+	fluentDConnectedGatewayLogName = "stats.ofr_connected_gateway"
+	fluentDShredLogName            = "stats.ofr_shred"
 )
 
 // Record represents a bloxroute style stat type record
@@ -43,6 +48,15 @@ type (
 		PeerIP    string `json:"peer_ip"`
 		Version   string `json:"version"`
 		AccountId string `json:"account_id"`
+	}
+
+	fluentDShredRecord struct {
+		Slot        uint64        `json:"slot"`
+		Index       uint32        `json:"index"`
+		Variant     string        `json:"variant"`
+		Source      string        `json:"source"`
+		ReceiveTime time.Time     `json:"receive_time"`
+		ProcessTime time.Duration `json:"process_time"`
 	}
 )
 
@@ -119,4 +133,28 @@ func (f *FluentD) LogConnectedGateway(
 	}
 
 	f.log(record, time.Now(), fluentDConnectedGatewayLogName)
+}
+
+func (f *FluentD) LogShredGateway(slot uint64, index uint32, variant string, source string, tm time.Time, processTime time.Duration) {
+	f.LogShred(fluentDGatewayShreadPropapagationRecordType, slot, index, variant, source, tm, processTime)
+}
+
+func (f *FluentD) LogShredRelay(slot uint64, index uint32, variant string, source string, tm time.Time, processTime time.Duration) {
+	f.LogShred(fluentDRelayShreadPropapagationRecordType, slot, index, variant, source, tm, processTime)
+}
+
+func (f *FluentD) LogShred(recordType string, slot uint64, index uint32, variant string, source string, tm time.Time, processTime time.Duration) {
+	record := Record{
+		Type: recordType,
+		Data: fluentDShredRecord{
+			Slot:        slot,
+			Index:       index,
+			Variant:     variant,
+			Source:      source,
+			ReceiveTime: tm,
+			ProcessTime: processTime,
+		},
+	}
+
+	f.log(record, time.Now(), fluentDShredLogName)
 }

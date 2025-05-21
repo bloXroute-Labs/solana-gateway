@@ -66,7 +66,6 @@ func New(cfg *Config) (Logger, func(), error) {
 		MaxBackups:   cfg.MaxBackups,
 		MaxAge:       cfg.MaxAge,
 	}, fluentDConfig, cfg.Version)
-
 	if err != nil {
 		return nil, nil, err
 	}
@@ -76,42 +75,42 @@ func New(cfg *Config) (Logger, func(), error) {
 
 type Logger interface {
 	Trace(string)
-	Tracef(string, ...interface{})
+	Tracef(string, ...any)
 	Debug(string)
-	Debugf(string, ...interface{})
+	Debugf(string, ...any)
 	Info(string)
-	Infof(string, ...interface{})
+	Infof(string, ...any)
 	Warn(string)
-	Warnf(string, ...interface{})
+	Warnf(string, ...any)
 	Error(string)
-	Errorf(string, ...interface{})
+	Errorf(string, ...any)
 }
 
 type logrusLogger struct{}
 
-func (l *logrusLogger) Trace(s string)                    { log.Trace(s) }
-func (l *logrusLogger) Tracef(s string, a ...interface{}) { log.Tracef(s, a...) }
-func (l *logrusLogger) Debug(s string)                    { log.Debug(s) }
-func (l *logrusLogger) Debugf(s string, a ...interface{}) { log.Debugf(s, a...) }
-func (l *logrusLogger) Info(s string)                     { log.Infof(s) }
-func (l *logrusLogger) Infof(s string, a ...interface{})  { log.Infof(s, a...) }
-func (l *logrusLogger) Warn(s string)                     { log.Warnf(s) }
-func (l *logrusLogger) Warnf(s string, a ...interface{})  { log.Warnf(s, a...) }
-func (l *logrusLogger) Error(s string)                    { log.Error(s) }
-func (l *logrusLogger) Errorf(s string, a ...interface{}) { log.Errorf(s, a...) }
+func (l *logrusLogger) Trace(s string)            { log.Trace(s) }
+func (l *logrusLogger) Tracef(s string, a ...any) { log.Tracef(s, a...) }
+func (l *logrusLogger) Debug(s string)            { log.Debug(s) }
+func (l *logrusLogger) Debugf(s string, a ...any) { log.Debugf(s, a...) }
+func (l *logrusLogger) Info(s string)             { log.Info(s) }
+func (l *logrusLogger) Infof(s string, a ...any)  { log.Infof(s, a...) }
+func (l *logrusLogger) Warn(s string)             { log.Warn(s) }
+func (l *logrusLogger) Warnf(s string, a ...any)  { log.Warnf(s, a...) }
+func (l *logrusLogger) Error(s string)            { log.Error(s) }
+func (l *logrusLogger) Errorf(s string, a ...any) { log.Errorf(s, a...) }
 
 type noopLogger struct{}
 
-func (l *noopLogger) Trace(string)                  {}
-func (l *noopLogger) Tracef(string, ...interface{}) {}
-func (l *noopLogger) Debug(string)                  {}
-func (l *noopLogger) Debugf(string, ...interface{}) {}
-func (l *noopLogger) Info(string)                   {}
-func (l *noopLogger) Infof(string, ...interface{})  {}
-func (l *noopLogger) Warn(string)                   {}
-func (l *noopLogger) Warnf(string, ...interface{})  {}
-func (l *noopLogger) Error(string)                  {}
-func (l *noopLogger) Errorf(string, ...interface{}) {}
+func (l *noopLogger) Trace(string)          {}
+func (l *noopLogger) Tracef(string, ...any) {}
+func (l *noopLogger) Debug(string)          {}
+func (l *noopLogger) Debugf(string, ...any) {}
+func (l *noopLogger) Info(string)           {}
+func (l *noopLogger) Infof(string, ...any)  {}
+func (l *noopLogger) Warn(string)           {}
+func (l *noopLogger) Warnf(string, ...any)  {}
+func (l *noopLogger) Error(string)          {}
+func (l *noopLogger) Errorf(string, ...any) {}
 
 // NewNoopLogger returns a logger that does nothing
 func NewNoopLogger() Logger {

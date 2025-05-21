@@ -86,6 +86,8 @@ func (f *TraderAPIForwarder) Forward(rawBody []byte) {
 			err := forwarder.forward(rawBody, f.authHeader)
 			if err != nil {
 				f.lg.Errorf("failed to forward tx %s to TraderAPI %s: %v", string(rawBody), forwarder.url, err)
+			} else {
+				f.lg.Tracef("Submitted tx %s to TraderAPI %s", string(rawBody), forwarder.url)
 			}
 		}(forwarder)
 	}
@@ -144,6 +146,9 @@ func newTraderAPIForwarder(lg logger.Logger, taURL string, wg *sync.WaitGroup) *
 		stats := pinger.Statistics() // get send/receive/duplicate/rtt stats
 		if stats.PacketsRecv > 0 {
 			fwd.ping = &stats.AvgRtt
+			lg.Debugf("TraderAPIForwarder: ping to Trader API %s = %v ms", pingAddr, fwd.ping.Milliseconds())
+		} else {
+			lg.Debugf("TraderAPIForwarder: was not able to calculate ping to Trader API %s", pingAddr)
 		}
 	}()
 

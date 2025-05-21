@@ -103,6 +103,8 @@ func (t *BxForwarder) Forward(rawTxBase64 string) {
 			err := txfwd.Forward(rawTxBase64)
 			if err != nil {
 				t.lg.Errorf("failed to submit tx %s to %s: %s", rawTxBase64, txfwd.Addr(), err)
+			} else {
+				t.lg.Tracef("Submitted tx %s to %s", rawTxBase64, txfwd.Addr())
 			}
 		}(txfwd)
 	}

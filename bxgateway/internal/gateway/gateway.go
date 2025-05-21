@@ -3,6 +3,7 @@ package gateway
 import (
 	"context"
 	"fmt"
+	"net/netip"
 	"sync"
 	"syscall"
 	"time"
@@ -13,13 +14,11 @@ import (
 	"github.com/bloXroute-Labs/solana-gateway/pkg/jwt"
 	"github.com/bloXroute-Labs/solana-gateway/pkg/logger"
 	"github.com/bloXroute-Labs/solana-gateway/pkg/ofr"
-	"github.com/bloXroute-Labs/solana-gateway/pkg/packet"
 	"github.com/bloXroute-Labs/solana-gateway/pkg/solana"
 	"github.com/bloXroute-Labs/solana-gateway/pkg/udp"
 )
 
 const (
-	udpShredSize     = 1228
 	aliveMsgInterval = 10 * time.Second
 
 	// noTrafficThreshold defines a period within which OFR is suppose to provide traffic,
@@ -33,13 +32,12 @@ type Gateway struct {
 	cache                     *cache.AlterKey
 	stats                     *ofr.Stats
 	nl                        *netlisten.NetworkListener
-	pool                      *sync.Pool
 	serverFd                  *udp.FDConn // fd receiving traffic from ofr
 	send2OFRFd                *udp.FDConn // fd sending traffic to ofr
 	send2NodeFd               *udp.FDConn // fd sending traffic to node
 	solanaTVUAddr             syscall.Sockaddr
 	ofrUDPAddrMx              *sync.RWMutex
-	ofrUDPAddr                *udp.Addr
+	ofrUDPAddr                udp.Addr
 	registrar                 Registrar
 	noTrafficTicker           *time.Ticker
 	refreshJWTTicker          *time.Ticker
@@ -50,6 +48,11 @@ type Gateway struct {
 	noValidator               bool
 	passiveMode               bool
 	jwt                       bool
+}
+
+type shredPacket struct {
+	payload [solana.UDPShredSize]byte
+	length  int
 }
 
 type Option func(*Gateway)
@@ -112,13 +115,12 @@ func New(
 		cache:            cache,
 		stats:            stats,
 		nl:               nl,
-		pool:             &sync.Pool{New: func() interface{} { s := make([]byte, udpShredSize); return &s }},
 		serverFd:         serverFd,
 		send2OFRFd:       snd2OFRFd,
 		send2NodeFd:      snd2NodeFd,
 		solanaTVUAddr:    solanaTVUAddr,
 		ofrUDPAddrMx:     &sync.RWMutex{},
-		ofrUDPAddr:       nil, // this addr is returned from registration endpoint
+		ofrUDPAddr:       udp.Addr{}, // this addr is returned from registration endpoint
 		passiveMode:      false,
 		registrar:        registrar,
 		refreshJWTTicker: stoppedTicker(), // will be reset if needed during registration
@@ -162,7 +164,7 @@ func (g *Gateway) printUnseenStats() {
 func (g *Gateway) Register() (syscall.Sockaddr, error) {
 	// unregister the previous address
 	g.ofrUDPAddrMx.Lock()
-	g.ofrUDPAddr = nil
+	g.ofrUDPAddr = udp.Addr{}
 	g.ofrUDPAddrMx.Unlock()
 
 	rsp, err := g.registrar.Register()
@@ -184,7 +186,7 @@ func (g *Gateway) Register() (syscall.Sockaddr, error) {
 	g.ofrUDPAddr = addr
 	g.ofrUDPAddrMx.Unlock()
 
-	var jwtToken = rsp.GetJwtToken()
+	jwtToken := rsp.GetJwtToken()
 
 	if g.bxForwarder != nil {
 		go g.bxForwarder.Update(jwtToken, rsp.GetTxPropagationConfig())
@@ -218,14 +220,14 @@ func (g *Gateway) Start() {
 
 	go g.reRegister()
 
-	ofrNodeCh := make(chan *[]byte, 1e5)
+	ofrNodeCh := make(chan shredData, 1e3)
 	go g.receiveShredsFromOFR(ofrNodeCh)
 	go g.broadcastShredsToNode(ofrNodeCh)
 
 	if g.noValidator {
 		go g.sendAliveMessages()
 	} else {
-		node2OFRCh := make(chan *packet.SniffPacket, 1e5)
+		node2OFRCh := make(chan netlisten.Shred, 1e3)
 		go g.nl.Recv(node2OFRCh)
 		go g.broadcastShredsToOFR(node2OFRCh)
 	}
@@ -236,7 +238,7 @@ func (g *Gateway) sendAliveMessages() {
 	defer ticker.Stop()
 
 	for {
-		if g.ofrUDPAddr != nil {
+		if !g.ofrUDPAddr.IsZero() {
 			if err := g.send2OFRFd.UnsafeWrite(solana.AliveMsg, g.ofrUDPAddr.SockAddr); err != nil {
 				g.lg.Errorf("sendAliveMessages: write to UDP: %v", err)
 			}
@@ -246,7 +248,72 @@ func (g *Gateway) sendAliveMessages() {
 	}
 }
 
-func (g *Gateway) receiveShredsFromOFR(broadcastCh chan *[]byte) {
+type shredData struct {
+	packet shredPacket
+	time   time.Time
+
+	shred solana.PartialShred
+	src   netip.Addr
+}
+
+func (g *Gateway) processShred(i int, broadcastCh chan shredData) (packet shredPacket) {
+	n, addr, err := g.serverFd.UnsafeReadFrom(packet.payload[:])
+	if err != nil {
+		g.lg.Errorf("read from udp: %s", err)
+		return
+	}
+	packet.length = n
+
+	if g.ofrUDPAddr.IsZero() {
+		g.lg.Warnf("ofrUDPAddr is empty")
+		return
+	}
+
+	// only check if IPs are equal due to Relays use different ports to send are recv traffic
+	if addr.NetipAddr != g.ofrUDPAddr.NetipAddr {
+		return
+	}
+
+	g.noTrafficTicker.Reset(noTrafficThreshold)
+	if g.passiveMode {
+		return
+	}
+
+	now := time.Now()
+	shred, err := solana.ParseShredPartial(packet.payload)
+	if err != nil {
+		g.lg.Errorf("ofr: failed to analyze packet from ofr: %s", err)
+		return
+	}
+
+	g.lg.Tracef("gateway: recv shred, slot: %d, index: %d, from: %s", shred.Slot, shred.Index, addr.NetipAddr.String())
+	if i == 1e5 {
+		g.lg.Debugf("health: receiveShredsFromOFR 100K: broadcast buf: %d", len(broadcastCh))
+		i = 0
+	}
+
+	g.stats.RecordNewShred(addr.NetipAddr, "OFR")
+
+	if !g.cache.Set(solana.ShredKey(shred.Slot, shred.Index, shred.Variant)) {
+		return
+	}
+
+	g.stats.RecordUnseenShred(addr.NetipAddr, shred, "OFR")
+
+	select {
+	case broadcastCh <- shredData{
+		packet: packet,
+		time:   now,
+		shred:  shred,
+		src:    addr.NetipAddr,
+	}:
+	default:
+		g.lg.Warn("gateway: forward shred from ofr: channel is full")
+	}
+	return
+}
+
+func (g *Gateway) receiveShredsFromOFR(broadcastCh chan shredData) {
 	for i := 0; ; i++ {
 		select {
 		case <-g.ctx.Done():
@@ -254,112 +321,61 @@ func (g *Gateway) receiveShredsFromOFR(broadcastCh chan *[]byte) {
 		default:
 		}
 
-		buf := g.pool.Get().(*[]byte)
-		_, addr, err := g.serverFd.UnsafeReadFrom(*buf)
-		if err != nil {
-			g.lg.Errorf("read from udp: %s", err)
-			g.pool.Put(buf)
-			continue
-		}
-
-		if g.ofrUDPAddr == nil {
-			g.lg.Warnf("ofrUDPAddr is nil")
-			g.pool.Put(buf)
-			continue
-		}
-
-		// only check if IPs are equal due to Relays use different ports to send are recv traffic
-		if addr.NetipAddr != g.ofrUDPAddr.NetipAddr {
-			g.pool.Put(buf)
-			continue
-		}
-
-		g.noTrafficTicker.Reset(noTrafficThreshold)
-
-		shred, err := solana.ParseShredPartial(*buf)
-		if err != nil {
-			g.lg.Errorf("ofr: failed to analyze packet from ofr: %s", err)
-			g.pool.Put(buf)
-			continue
-		}
-
-		g.lg.Tracef("gateway: recv shred, slot: %d, index: %d, from: %s", shred.Slot, shred.Index, addr.NetipAddr.String())
-		if i == 1e5 {
-			g.lg.Debugf("health: receiveShredsFromOFR 100K: broadcast buf: %d", len(broadcastCh))
-			i = 0
-		}
-
-		g.stats.RecordNewShred(addr.NetipAddr, "OFR")
-
-		if !g.cache.Set(solana.ShredKey(shred.Slot, shred.Index, shred.Variant)) {
-			g.pool.Put(buf)
-			continue
-		}
-
-		g.stats.RecordUnseenShred(addr.NetipAddr, shred, "OFR")
-
-		if g.passiveMode {
-			g.pool.Put(buf)
-			continue
-		}
-
-		select {
-		case broadcastCh <- buf:
-		default:
-			g.pool.Put(buf)
-			g.lg.Warn("gateway: forward shred from ofr: channel is full")
-		}
+		g.processShred(i, broadcastCh)
 	}
 }
 
-func (g *Gateway) broadcastShredsToNode(ch <-chan *[]byte) {
+func (g *Gateway) broadcastShredsToNode(ch <-chan shredData) {
 	if g.passiveMode {
 		return
 	}
 
-	for buf := range ch {
+	for shred := range ch {
 		if !g.noValidator {
-			if err := g.send2NodeFd.UnsafeWrite(*buf, g.solanaTVUAddr); err != nil {
+			if err := g.send2NodeFd.UnsafeWrite(shred.packet.payload[:shred.packet.length], g.solanaTVUAddr); err != nil {
 				g.lg.Errorf("broadcast to solana node: write to UDP: %s: %s", udp.SockaddrString(g.solanaTVUAddr), err)
 			}
 		}
 
 		for _, addr := range g.extraBroadcastAddrs {
-			if err := g.send2NodeFd.UnsafeWrite(*buf, addr); err != nil {
+			if err := g.send2NodeFd.UnsafeWrite(shred.packet.payload[:shred.packet.length], addr); err != nil {
 				g.lg.Errorf("broadcast to extra addr: write to UDP: %s: %s", udp.SockaddrString(addr), err)
 			}
 		}
 
-		g.pool.Put(buf)
+		if solana.ShouldSample(shred.shred) {
+			g.stats.RecordShredGateway(shred.shred.Slot, shred.shred.Index, shred.shred.Variant.String(), shred.src.String(), time.Now(), time.Since(shred.time))
+		}
 	}
 }
 
-func (g *Gateway) broadcastShredsToOFR(ch <-chan *packet.SniffPacket) {
-	for pkt := range ch {
+func (g *Gateway) broadcastShredsToOFR(ch <-chan netlisten.Shred) {
+	for shred := range ch {
 		g.ofrUDPAddrMx.RLock()
 		ofrUDPAddr := g.ofrUDPAddr
 		g.ofrUDPAddrMx.RUnlock()
 
-		if ofrUDPAddr == nil {
-			pkt.Free()
+		if ofrUDPAddr.IsZero() {
 			continue // we are not yet registered
 		}
 
-		err := g.send2OFRFd.UnsafeWrite(pkt.Payload, ofrUDPAddr.SockAddr)
+		err := g.send2OFRFd.UnsafeWrite(shred.Packet.Payload[:shred.Packet.Length], ofrUDPAddr.SockAddr)
 		if err != nil {
 			g.lg.Errorf("broadcast to OFR: write to UDP addr: %s: %s", udp.SockaddrString(ofrUDPAddr.SockAddr), err)
 		}
 
 		if !g.extraBroadcastFromOFROnly {
 			for _, addr := range g.extraBroadcastAddrs {
-				err = g.send2OFRFd.UnsafeWrite(pkt.Payload, addr)
+				err = g.send2OFRFd.UnsafeWrite(shred.Packet.Payload[:shred.Packet.Length], addr)
 				if err != nil {
 					g.lg.Errorf("broadcast to extra addr: write to UDP: %s: %s", udp.SockaddrString(addr), err)
 				}
 			}
 		}
 
-		pkt.Free()
+		if solana.ShouldSample(shred.Shred) {
+			g.stats.RecordShredGateway(shred.Shred.Slot, shred.Shred.Index, shred.Shred.Variant.String(), shred.Packet.SrcAddr.String(), shred.Packet.ReceiveTime, time.Since(shred.Packet.ReceiveTime))
+		}
 	}
 }
 

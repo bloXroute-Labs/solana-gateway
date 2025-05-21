@@ -23,6 +23,7 @@ import (
 	"github.com/bloXroute-Labs/solana-gateway/bxgateway/internal/netlisten"
 	"github.com/bloXroute-Labs/solana-gateway/bxgateway/internal/txfwd"
 	"github.com/bloXroute-Labs/solana-gateway/pkg/cache"
+	"github.com/bloXroute-Labs/solana-gateway/pkg/config"
 	"github.com/bloXroute-Labs/solana-gateway/pkg/logger"
 	"github.com/bloXroute-Labs/solana-gateway/pkg/ofr"
 	pb "github.com/bloXroute-Labs/solana-gateway/pkg/protobuf"
@@ -44,7 +45,6 @@ const (
 	//
 	// "passive mode" means to be passive in relation to the solana-validator
 	// it only forwards [Solana -> OFR] traffic, but not [OFR -> Solana]
-	passiveModeEnv        = "SG_MODE_PASSIVE"
 	gatewayVersionEnv     = "SG_VERSION"
 	numOfTraderAPISToSend = 2
 )
@@ -55,6 +55,8 @@ const (
 	logMaxSizeFlag             = "log-max-size"
 	logMaxBackupsFlag          = "log-max-backups"
 	logMaxAgeFlag              = "log-max-age"
+	logFluentdFlag             = "log-fluentd"
+	logFluentHostFlag          = "log-fluentd-host"
 	solanaTVUBroadcastPortFlag = "tvu-broadcast-port"
 	solanaTVUPortFlag          = "tvu-port"
 	sniffInterfaceFlag         = "network-interface"
@@ -66,6 +68,7 @@ const (
 	broadcastAddressesFlag     = "broadcast-addresses"
 	broadcastFromOfrOnlyFlag   = "broadcast-from-ofr-only"
 	noValidatorFlag            = "no-validator"
+	submissionOnlyFlag         = "tx-submission-only"
 	stakedNodeFlag             = "staked-node"
 	runHttpServerFlag          = "run-http-server"
 	httpPortFlag               = "http-port"
@@ -73,7 +76,7 @@ const (
 )
 
 func main() {
-	var app = cli.App{
+	app := cli.App{
 		Name: "solana-gateway",
 		Flags: []cli.Flag{
 			&cli.StringFlag{Name: logLevelFlag, Value: "info", Usage: "Stdout log level"},
@@ -81,6 +84,8 @@ func main() {
 			&cli.IntFlag{Name: logMaxSizeFlag, Value: 100, Usage: "Max logfile size MB"},
 			&cli.IntFlag{Name: logMaxBackupsFlag, Value: 10, Usage: "Max logfile backups"},
 			&cli.IntFlag{Name: logMaxAgeFlag, Value: 10, Usage: "Logfile max age"},
+			&cli.BoolFlag{Name: logFluentdFlag, Value: false, Hidden: true, Usage: "enable fluentd"},
+			&cli.StringFlag{Name: logFluentHostFlag, Value: "127.0.0.1", Hidden: true, Usage: "fluentd flag"},
 			&cli.IntFlag{Name: solanaTVUBroadcastPortFlag, Value: 0, Usage: "Solana Validator TVU Broadcast Port"},
 			&cli.IntFlag{Name: solanaTVUPortFlag, Value: 8001, Usage: "Solana Validator TVU Port"},
 			&cli.StringFlag{Name: sniffInterfaceFlag, Usage: "Outbound network interface"},
@@ -92,6 +97,7 @@ func main() {
 			&cli.StringSliceFlag{Name: broadcastAddressesFlag, Usage: "Sets extra addresses to send shreds received from OFR and Solana Node"},
 			&cli.BoolFlag{Name: broadcastFromOfrOnlyFlag, Aliases: []string{"broadcast-from-bdn-only"}, Usage: "Do not send traffic from Solana Node to extra addresses specified with --broadcast-addresses"},
 			&cli.BoolFlag{Name: noValidatorFlag, Value: false, Usage: "Run gw without node, only for elite/ultra accounts"},
+			&cli.BoolFlag{Name: submissionOnlyFlag, Value: false, Usage: "Disable all gw functionality other than tx submission, only for authorized accounts."},
 			&cli.BoolFlag{Name: stakedNodeFlag, Value: false, Usage: "Run as a stacked node"},
 			&cli.BoolFlag{Name: runHttpServerFlag, Value: false, Usage: "Run http server to submit txs to trader api"},
 			&cli.IntFlag{Name: httpPortFlag, Value: 8080, Required: false, Usage: "HTTP port for submitting txs to trader api"},
@@ -99,25 +105,30 @@ func main() {
 		},
 		Action: func(c *cli.Context) error {
 			return run(
-				c.String(logLevelFlag),
-				c.String(logFileLevelFlag),
-				c.Int(logMaxSizeFlag),
-				c.Int(logMaxBackupsFlag),
-				c.Int(logMaxAgeFlag),
-				c.Int(solanaTVUBroadcastPortFlag),
-				c.Int(solanaTVUPortFlag),
-				c.String(sniffInterfaceFlag),
-				c.String(ofrHostFlag),
-				c.Int(ofrGRPCPortFlag),
-				c.Int(udpServerPortFlag),
-				c.String(authHeaderFlag),
-				c.StringSlice(broadcastAddressesFlag),
-				c.Bool(broadcastFromOfrOnlyFlag),
-				c.Bool(noValidatorFlag),
-				c.Bool(stakedNodeFlag),
-				c.Bool(runHttpServerFlag),
-				c.Int(httpPortFlag),
-				c.String(dynamicPortRangeFlag),
+				&config.Gateway{
+					LogLevel:                  c.String(logLevelFlag),
+					LogFileLevel:              c.String(logFileLevelFlag),
+					LogMaxSize:                c.Int(logMaxSizeFlag),
+					LogMaxBackups:             c.Int(logMaxBackupsFlag),
+					LogMaxAge:                 c.Int(logMaxAgeFlag),
+					SolanaTVUBroadcastPort:    c.Int(solanaTVUBroadcastPortFlag),
+					SolanaTVUPort:             c.Int(solanaTVUPortFlag),
+					SniffInterface:            c.String(sniffInterfaceFlag),
+					OfrHost:                   c.String(ofrHostFlag),
+					OfrGRPCPort:               c.Int(ofrGRPCPortFlag),
+					UdpServerPort:             c.Int(udpServerPortFlag),
+					AuthHeader:                c.String(authHeaderFlag),
+					ExtraBroadcastAddrs:       c.StringSlice(broadcastAddressesFlag),
+					ExtraBroadcastFromOFROnly: c.Bool(broadcastFromOfrOnlyFlag),
+					NoValidator:               c.Bool(noValidatorFlag),
+					SubmissionOnly:            c.Bool(submissionOnlyFlag),
+					StakedNode:                c.Bool(stakedNodeFlag),
+					RunHttpServer:             c.Bool(runHttpServerFlag),
+					HttpPort:                  c.Int(httpPortFlag),
+					DynamicPortRangeString:    c.String(dynamicPortRangeFlag),
+					LogFluentd:                c.Bool(logFluentdFlag),
+					LogFluentdHost:            c.String(logFluentHostFlag),
+				},
 			)
 		},
 	}
@@ -129,35 +140,17 @@ func main() {
 }
 
 func run(
-	logLevel string,
-	logFileLevel string,
-	logMaxSize int,
-	logMaxBackups int,
-	logMaxAge int,
-	solanaTVUBroadcastPort int,
-	solanaTVUPort int,
-	sniffInterface string,
-	ofrHost string,
-	ofrGRPCPort int,
-	udpServerPort int,
-	authHeader string,
-	extraBroadcastAddrs []string,
-	extraBroadcastFromOFROnly bool,
-	noValidator bool,
-	stakedNode bool,
-	runHttpServer bool,
-	httpPort int,
-	dynamicPortRangeString string,
+	cfg *config.Gateway,
 ) error {
-	if !noValidator && sniffInterface == "" {
+	if !cfg.NoValidator && cfg.SniffInterface == "" {
 		log.Fatalln("network-interface can't be empty")
 	}
-	var version = os.Getenv(gatewayVersionEnv)
+	version := os.Getenv(gatewayVersionEnv)
 	if version == "" {
 		version = defaultVersion
 	}
 
-	ports := strings.Split(dynamicPortRangeString, "-")
+	ports := strings.Split(cfg.DynamicPortRangeString, "-")
 	dynamicPortRangeMin, err := strconv.Atoi(ports[0])
 	if err != nil {
 		return fmt.Errorf("convert min-port: %s", err)
@@ -178,12 +171,12 @@ func run(
 
 	lg, closeLogger, err := logger.New(&logger.Config{
 		AppName:    appName,
-		Level:      logLevel,
-		FileLevel:  logFileLevel,
-		MaxSize:    logMaxSize,
-		MaxBackups: logMaxBackups,
-		MaxAge:     logMaxAge,
-		Port:       udpServerPort,
+		Level:      cfg.LogLevel,
+		FileLevel:  cfg.LogFileLevel,
+		MaxSize:    cfg.LogMaxSize,
+		MaxBackups: cfg.LogMaxBackups,
+		MaxAge:     cfg.LogMaxAge,
+		Port:       cfg.UdpServerPort,
 		Version:    version,
 		Fluentd:    false,
 	})
@@ -191,21 +184,20 @@ func run(
 		log.Fatalln("init service logger:", err)
 	}
 
-	var gwopts = make([]gateway.Option, 0)
+	gwopts := make([]gateway.Option, 0)
 
-	if runHttpServer {
-		var bxfwd = txfwd.NewBxForwarder(context.Background(), lg)
-		var traderapifwd = txfwd.NewTraderAPIForwarder(lg, numOfTraderAPISToSend, authHeader)
+	if cfg.RunHttpServer {
+		bxfwd := txfwd.NewBxForwarder(context.Background(), lg)
+		traderapifwd := txfwd.NewTraderAPIForwarder(lg, numOfTraderAPISToSend, cfg.AuthHeader)
 		gwopts = append(gwopts, gateway.WithTxForwarders(bxfwd, traderapifwd))
-		http_server.Run(lg, httpPort, bxfwd, traderapifwd)
+		http_server.Run(lg, cfg.HttpPort, bxfwd, traderapifwd)
 	}
 
 	defer closeLogger()
 
 	var (
-		ctx, cancel        = context.WithCancel(context.Background())
-		sig                = make(chan os.Signal, 1)
-		gatewayModePassive = os.Getenv(passiveModeEnv) != ""
+		ctx, cancel = context.WithCancel(context.Background())
+		sig         = make(chan os.Signal, 1)
 	)
 
 	defer cancel()
@@ -214,7 +206,7 @@ func run(
 
 	signal.Notify(sig, os.Interrupt)
 
-	solanaNodeTVUAddrUDP, err := net.ResolveUDPAddr("udp", fmt.Sprintf("%s:%d", localhost, solanaTVUPort))
+	solanaNodeTVUAddrUDP, err := net.ResolveUDPAddr("udp", fmt.Sprintf("%s:%d", localhost, cfg.SolanaTVUPort))
 	if err != nil {
 		lg.Errorf("resolve solana udp addr: %s", err)
 		return err
@@ -226,68 +218,81 @@ func run(
 		return err
 	}
 
-	var alterKeyCache = cache.NewAlterKey(time.Second * 5)
-	var stats = ofr.NewStats(lg, time.Minute)
+	alterKeyCache := cache.NewAlterKey(time.Second * 5)
+
+	ofrStatsOptions := make([]ofr.StatsOption, 0)
+	if cfg.LogFluentd {
+		fluentd, err := ofr.NewFluentD(lg, cfg.LogFluentdHost, 24224)
+		if err != nil {
+			lg.Errorf("init fluentd: %s", err)
+			closeLogger()
+		}
+
+		ofrStatsOptions = append(ofrStatsOptions, ofr.StatsWithFluentD(fluentd))
+		lg.Info("enabled ofr stats fluentd")
+	}
+
+	stats := ofr.NewStats(lg, time.Minute, ofrStatsOptions...)
 
 	var nl *netlisten.NetworkListener
 	// assign net listener only when running with validator
-	if !noValidator {
+	if !cfg.NoValidator {
 		var outPorts []int
-		if stakedNode {
+		if cfg.StakedNode {
 			// If the TVU broadcast port is not specified we start listening to
 			// a range of ports where the TVU broadcast port is likely to be in.
-			if solanaTVUBroadcastPort == 0 {
+			if cfg.SolanaTVUBroadcastPort == 0 {
 				// The minimal offset of the TVU broadcast port from the TVU port.
 				// This value is derived from the validator's codebase.
 				const TVUBroadcastOffset = 11
 				for i := range 10 {
-					outPorts = append(outPorts, solanaTVUPort+TVUBroadcastOffset+i)
+					outPorts = append(outPorts, cfg.SolanaTVUPort+TVUBroadcastOffset+i)
 				}
 			} else {
-				outPorts = append(outPorts, solanaTVUBroadcastPort)
+				outPorts = append(outPorts, cfg.SolanaTVUBroadcastPort)
 			}
 		}
-		nl, err = netlisten.NewNetworkListener(ctx, lg, alterKeyCache, stats, sniffInterface, []int{solanaTVUPort}, outPorts)
+		nl, err = netlisten.NewNetworkListener(ctx, lg, alterKeyCache, stats, cfg.SniffInterface, []int{cfg.SolanaTVUPort}, outPorts)
 		if err != nil {
 			lg.Errorf("init network listener: %s", err)
 			return err
 		}
 	}
 
-	conn, err := grpc.NewClient(fmt.Sprintf("%s:%d", ofrHost, ofrGRPCPort), grpc.WithTransportCredentials(insecure.NewCredentials()))
+	conn, err := grpc.NewClient(fmt.Sprintf("%s:%d", cfg.OfrHost, cfg.OfrGRPCPort), grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
 		lg.Errorf("grpc dial: %s", err)
 		return err
 	}
 
 	fdset := udp.NewFDSet(lg, int64(dynamicPortRangeMin), int64(dynamicPortRangeMax))
-	serverFd, err := udp.Server(udpServerPort)
+	serverFd, err := udp.Server(cfg.UdpServerPort)
 	if err != nil {
-		lg.Errorf("new server fd: port: %d: %s", udpServerPort, err)
+		lg.Errorf("new server fd: port: %d: %s", cfg.UdpServerPort, err)
 		return err
 	}
 
-	registrar := gateway.NewOFRRegistrar(ctx, pb.NewRelayClient(conn), authHeader, version, serverFd.Port)
+	registrar := gateway.NewOFRRegistrar(ctx, pb.NewRelayClient(conn), cfg, version, serverFd.Port)
 
-	if gatewayModePassive {
+	if cfg.SubmissionOnly {
 		gwopts = append(gwopts, gateway.PassiveMode())
 		lg.Warn("gateway is starting in passive mode (packets from OFR are not forwarded to validator)")
 	}
 
-	if noValidator {
+	if cfg.NoValidator || cfg.SubmissionOnly {
 		gwopts = append(gwopts, gateway.WithoutSolanaNode())
 		lg.Info("gateway is starting without solana node connection")
 	}
 
-	if len(extraBroadcastAddrs) != 0 {
-		opt, err := gateway.WithBroadcastAddrs(extraBroadcastAddrs, extraBroadcastFromOFROnly)
+	if len(cfg.ExtraBroadcastAddrs) != 0 {
+		opt, err := gateway.WithBroadcastAddrs(cfg.ExtraBroadcastAddrs, cfg.ExtraBroadcastFromOFROnly)
 		if err != nil {
 			lg.Errorf("set broadcast addrs: %s", err)
 			return err
 		}
 
 		gwopts = append(gwopts, opt)
-		lg.Infof("gateway is starting with additional broadcast addrs: %v", extraBroadcastAddrs)
+		lg.Infof("gateway is starting with additional broadcast addrs: %v", cfg.ExtraBroadcastAddrs)
 	}
 
 	gw, err := gateway.New(ctx, lg, alterKeyCache, stats, nl, serverFd, fdset, solanaNodeTVUAddr, registrar, gwopts...)
