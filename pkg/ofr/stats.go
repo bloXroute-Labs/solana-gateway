@@ -4,9 +4,11 @@ import (
 	"fmt"
 	"net/netip"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
+	"unsafe"
 
 	"github.com/bloXroute-Labs/solana-gateway/pkg/logger"
 	"github.com/bloXroute-Labs/solana-gateway/pkg/solana"
@@ -111,15 +113,16 @@ type (
 	firstShredRecorder struct {
 		mp map[string]time.Time // slot-type: record_time
 		mx sync.Mutex
-		ch chan *firstShredRecord
+		ch chan firstShredRecord
 		lg logger.Logger
 	}
 
 	firstShredRecord struct {
-		src   netip.Addr
-		slot  uint64
-		index uint32
-		typ   string
+		src      netip.Addr
+		slot     uint64
+		index    uint32
+		typ      string
+		typeByte byte
 	}
 
 	logEntry struct {
@@ -216,15 +219,22 @@ func (s *Stats) logStats(totalShreds *ShredsBySource, unseenShreds *ShredsBySour
 		if total.Shreds > 0 {
 			kpi = float64(unseenCount) / float64(total.Shreds)
 		}
-		logEntries = append(logEntries, logEntry{source: total.Src, firstSeenShreds: unseenCount, totalShreds: total.Shreds,
-			firstSeenPercentage: firstSeenPercentage, kpi: kpi, nodeType: total.NodeType, regions: s.mapKeysToString(total.Src, &s.regions)})
+		logEntries = append(logEntries, logEntry{
+			source: total.Src, firstSeenShreds: unseenCount, totalShreds: total.Shreds,
+			firstSeenPercentage: firstSeenPercentage, kpi: kpi, nodeType: total.NodeType, regions: s.mapKeysToString(total.Src, &s.regions),
+		})
 	}
 	sort.Slice(logEntries, func(i, j int) bool {
 		return logEntries[i].firstSeenShreds > logEntries[j].firstSeenShreds
 	})
 	for _, entry := range logEntries {
-		s.lg.Infof("%-16s %-7s first seen shreds: %-6d (%-5.2f%%) total shreds: %-6d kpi: %-4.2f regions: %s", entry.source, entry.nodeType, entry.firstSeenShreds, entry.firstSeenPercentage,
-			entry.totalShreds, entry.kpi, entry.regions)
+		if entry.regions == "" {
+			s.lg.Infof("%-16s %-7s first seen shreds: %-6d (%-5.2f%%) total shreds: %-6d kpi: %-4.2f", entry.source, entry.nodeType, entry.firstSeenShreds, entry.firstSeenPercentage,
+				entry.totalShreds, entry.kpi)
+		} else {
+			s.lg.Infof("%-16s %-7s first seen shreds: %-6d (%-5.2f%%) total shreds: %-6d kpi: %-4.2f regions: %s", entry.source, entry.nodeType, entry.firstSeenShreds, entry.firstSeenPercentage,
+				entry.totalShreds, entry.kpi, entry.regions)
+		}
 	}
 }
 
@@ -257,7 +267,7 @@ func (s *Stats) RecordNewShred(src netip.Addr, nodeType string) {
 	s.totalShredsRecorder.record(src, nodeType)
 }
 
-func (s *Stats) RecordUnseenShred(src netip.Addr, shred *solana.PartialShred, nodeType string) {
+func (s *Stats) RecordUnseenShred(src netip.Addr, shred solana.PartialShred, nodeType string) {
 	s.unseenShredsRecorder.record(src, nodeType)
 	s.firstShredRecorder.record(src, shred)
 }
@@ -268,6 +278,22 @@ func (s *Stats) RecordNewGateway(peerIP string, version string, accountID string
 	}
 
 	s.fluentD.LogConnectedGateway(peerIP, version, accountID)
+}
+
+func (s *Stats) RecordShredGateway(slot uint64, index uint32, variant string, source string, tm time.Time, processTime time.Duration) {
+	if s.fluentD == nil {
+		return
+	}
+
+	s.fluentD.LogShredGateway(slot, index, variant, source, tm, processTime)
+}
+
+func (s *Stats) RecordShredRelay(slot uint64, index uint32, variant string, source string, tm time.Time, processTime time.Duration) {
+	if s.fluentD == nil {
+		return
+	}
+
+	s.fluentD.LogShredRelay(slot, index, variant, source, tm, processTime)
 }
 
 // RecvFlushUnseenShreds returns a chan which drops UnseenShredsBySource when flushing for additional logging.
@@ -289,7 +315,7 @@ func newFirstShredRecorder(lg logger.Logger) *firstShredRecorder {
 	rec := &firstShredRecorder{
 		mp: make(map[string]time.Time),
 		mx: sync.Mutex{},
-		ch: make(chan *firstShredRecord, shredsRecorderChanBuf),
+		ch: make(chan firstShredRecord, shredsRecorderChanBuf),
 		lg: lg,
 	}
 
@@ -297,13 +323,14 @@ func newFirstShredRecorder(lg logger.Logger) *firstShredRecorder {
 	return rec
 }
 
-func (r *firstShredRecorder) record(src netip.Addr, shred *solana.PartialShred) {
+func (r *firstShredRecorder) record(src netip.Addr, shred solana.PartialShred) {
 	select {
-	case r.ch <- &firstShredRecord{
-		src:   src,
-		slot:  shred.Slot,
-		index: shred.Index,
-		typ:   shred.Variant.String(),
+	case r.ch <- firstShredRecord{
+		src:      src,
+		slot:     shred.Slot,
+		index:    shred.Index,
+		typ:      shred.Variant.String(),
+		typeByte: shred.Variant.Variant,
 	}:
 	default:
 		r.lg.Warn("firstShredRecorder: channel is full")
@@ -320,7 +347,7 @@ func (r *firstShredRecorder) run() {
 			r.lg.Debugf("stats: MIDDLE shred from: %s slot: %d index: %d type: %s", shred.src.String(), shred.slot, shred.index, shred.typ)
 		}
 
-		key := fmt.Sprintf("%d%s", shred.slot, shred.typ)
+		key := buildKey(shred.slot, shred.typeByte)
 
 		r.mx.Lock()
 		if _, ok := r.mp[key]; !ok {
@@ -329,6 +356,13 @@ func (r *firstShredRecorder) run() {
 		}
 		r.mx.Unlock()
 	}
+}
+
+func buildKey(slot uint64, typ byte) string {
+	buf := make([]byte, 0, 10) // one alloc here
+	buf = strconv.AppendUint(buf, slot, 10)
+	buf = append(buf, typ)
+	return unsafe.String(unsafe.SliceData(buf), len(buf))
 }
 
 func (r *firstShredRecorder) clean() {

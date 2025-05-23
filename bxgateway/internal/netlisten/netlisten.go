@@ -87,8 +87,13 @@ func NewNetworkListener(ctx context.Context, lg logger.Logger, cache *cache.Alte
 	return nl, nil
 }
 
-func (s *NetworkListener) Recv(ch chan<- *packet.SniffPacket) {
-	sniffRecvCh := make(chan *packet.SniffPacket, recvChBuf)
+type Shred struct {
+	Packet packet.SniffPacket
+	Shred  solana.PartialShred
+}
+
+func (s *NetworkListener) Recv(ch chan<- Shred) {
+	sniffRecvCh := make(chan packet.SniffPacket, recvChBuf)
 	done := s.ctx.Done()
 
 	var wg sync.WaitGroup
@@ -117,7 +122,6 @@ func (s *NetworkListener) Recv(ch chan<- *packet.SniffPacket) {
 
 			shred, err := solana.ParseShredPartial(sp.Payload)
 			if err != nil {
-				sp.Free()
 				s.lg.Tracef("%s: partial parse shred: %s", pd, err)
 
 				if pd.outgoing {
@@ -136,7 +140,6 @@ func (s *NetworkListener) Recv(ch chan<- *packet.SniffPacket) {
 			s.stats.RecordNewShred(s.localAddr, "Turbine")
 
 			if !s.cache.Set(solana.ShredKey(shred.Slot, shred.Index, shred.Variant)) {
-				sp.Free()
 				if pd.outgoing {
 					s.lg.Debugf("%s: duplicate outgoing shred %d:%d", pd, shred.Slot, shred.Index)
 
@@ -159,9 +162,11 @@ func (s *NetworkListener) Recv(ch chan<- *packet.SniffPacket) {
 			}
 
 			select {
-			case ch <- sp:
+			case ch <- Shred{
+				Packet: sp,
+				Shred:  shred,
+			}:
 			default:
-				sp.Free()
 				s.lg.Warn("net-listener: unable to forward packet: channel is full")
 			}
 		case <-noOutgoingTraffic.C:

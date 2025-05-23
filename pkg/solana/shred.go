@@ -6,7 +6,11 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
-	"strings"
+	"unsafe"
+)
+
+const (
+	UDPShredSize = 1228
 )
 
 // Legacy data shreds are always zero padded and
@@ -58,7 +62,9 @@ const (
 )
 
 // see solana/ledger/src/blockstore.rs - MAX_DATA_SHREDS_PER_SLOT
-const maxDataShredsPerSlot = 32768
+const (
+	maxDataShredsPerSlot = 32768
+)
 
 var AliveMsg = []byte("alive")
 
@@ -84,7 +90,7 @@ type ShredVariantByte struct {
 }
 
 // ParseShredVariant accepts a byte and returns a ShredVariantByte struct.
-func ParseShredVariant(b byte) (*ShredVariantByte, error) {
+func ParseShredVariant(b byte) (ShredVariantByte, error) {
 	// extract the first 4 bits to identify the variant
 	variant := b & 0b11110000
 	// extract the last 4 bits to get the proof size
@@ -92,23 +98,23 @@ func ParseShredVariant(b byte) (*ShredVariantByte, error) {
 
 	switch variant {
 	case LegacyCode:
-		return &ShredVariantByte{Variant: variant, VariantString: "LegacyCode"}, nil
+		return ShredVariantByte{Variant: variant, VariantString: "LegacyCode"}, nil
 	case LegacyData:
-		return &ShredVariantByte{Variant: variant, VariantString: "LegacyData"}, nil
+		return ShredVariantByte{Variant: variant, VariantString: "LegacyData"}, nil
 	case MerkleCode:
-		return &ShredVariantByte{Variant: variant, VariantString: "MerkleCode", ProofSize: proofSize}, nil
+		return ShredVariantByte{Variant: variant, VariantString: "MerkleCode", ProofSize: proofSize}, nil
 	case MerkleCodeChained:
-		return &ShredVariantByte{Variant: variant, VariantString: "MerkleCodeChained", ProofSize: proofSize, Chained: true}, nil
+		return ShredVariantByte{Variant: variant, VariantString: "MerkleCodeChained", ProofSize: proofSize, Chained: true}, nil
 	case MerkleCodeResigned:
-		return &ShredVariantByte{Variant: variant, VariantString: "MerkleCodeResigned", ProofSize: proofSize, Chained: true, Resigned: true}, nil
+		return ShredVariantByte{Variant: variant, VariantString: "MerkleCodeResigned", ProofSize: proofSize, Chained: true, Resigned: true}, nil
 	case MerkleData:
-		return &ShredVariantByte{Variant: variant, VariantString: "MerkleData", ProofSize: proofSize}, nil
+		return ShredVariantByte{Variant: variant, VariantString: "MerkleData", ProofSize: proofSize}, nil
 	case MerkleDataChained:
-		return &ShredVariantByte{Variant: variant, VariantString: "MerkleDataChained", ProofSize: proofSize, Chained: true}, nil
+		return ShredVariantByte{Variant: variant, VariantString: "MerkleDataChained", ProofSize: proofSize, Chained: true}, nil
 	case MerkleDataResigned:
-		return &ShredVariantByte{Variant: variant, VariantString: "MerkleDataResigned", ProofSize: proofSize, Chained: true, Resigned: true}, nil
+		return ShredVariantByte{Variant: variant, VariantString: "MerkleDataResigned", ProofSize: proofSize, Chained: true, Resigned: true}, nil
 	default:
-		return nil, fmt.Errorf("unknown shred variant: %08b", b)
+		return ShredVariantByte{}, fmt.Errorf("unknown shred variant: %08b", b)
 	}
 }
 
@@ -117,7 +123,7 @@ type Shred struct {
 
 	DataSize  int
 	Signature string
-	Variant   *ShredVariantByte
+	Variant   ShredVariantByte
 	Slot      uint64
 	Index     uint32
 	FecSet    uint32
@@ -129,24 +135,24 @@ type Shred struct {
 
 // PartialShred has only information about shred type, slot and index, Raw is full shred
 type PartialShred struct {
-	Raw     []byte
-	Variant *ShredVariantByte
+	Raw     [UDPShredSize]byte
+	Variant ShredVariantByte
 	Slot    uint64
 	Index   uint32
 }
 
-func ParseShred(s []byte) (*Shred, error) {
+func ParseShred(s []byte) (Shred, error) {
 	if len(s) < sizeOfSignature {
-		return nil, fmt.Errorf("shred size too small: %d", len(s))
+		return Shred{}, fmt.Errorf("shred size too small: %d", len(s))
 	}
 
 	shredVariant, err := ParseShredVariant(s[sizeOfSignature])
 	if err != nil {
-		return nil, fmt.Errorf("parse shred variant byte: %w", err)
+		return Shred{}, fmt.Errorf("parse shred variant byte: %w", err)
 	}
 
 	if err := validateShredSize(len(s), shredVariant); err != nil {
-		return nil, err
+		return Shred{}, err
 	}
 
 	signatureBin := s[:sizeOfSignature]
@@ -175,7 +181,7 @@ func ParseShred(s []byte) (*Shred, error) {
 	fecSetBin := s[sizeOfSignature+sizeOfShredVariant+sizeOfShredSlot+sizeOfShredIndex+sizeOfVersion : sizeOfSignature+sizeOfShredVariant+sizeOfShredSlot+sizeOfShredIndex+sizeOfVersion+sizeOfFecSet]
 	fecSet := binary.LittleEndian.Uint32(fecSetBin)
 
-	return &Shred{
+	return Shred{
 		Raw:       s,
 		DataSize:  len(s),
 		Signature: signature,
@@ -190,24 +196,24 @@ func ParseShred(s []byte) (*Shred, error) {
 	}, nil
 }
 
-func ParseShredPartial(s []byte) (*PartialShred, error) {
+func ParseShredPartial(s [UDPShredSize]byte) (PartialShred, error) {
 	if len(s) < sizeOfParent {
-		return nil, fmt.Errorf("shred size too small: %d", len(s))
+		return PartialShred{}, fmt.Errorf("shred size too small: %d", len(s))
 	}
 
 	shredVariant, err := ParseShredVariant(s[sizeOfSignature])
 	if err != nil {
-		return nil, err
+		return PartialShred{}, err
 	}
 
 	if err := validateShredSize(len(s), shredVariant); err != nil {
-		return nil, err
+		return PartialShred{}, err
 	}
 	index := binary.LittleEndian.Uint32(
 		s[sizeOfSignature+sizeOfShredVariant+sizeOfShredSlot : sizeOfSignature+sizeOfShredVariant+sizeOfShredSlot+sizeOfShredIndex])
 
 	if index > maxDataShredsPerSlot {
-		return nil, fmt.Errorf("shred index is too big: %d", index)
+		return PartialShred{}, fmt.Errorf("shred index is too big: %d", index)
 	}
 
 	slot := binary.LittleEndian.Uint64(
@@ -216,15 +222,15 @@ func ParseShredPartial(s []byte) (*PartialShred, error) {
 	if shredVariant.IsData() {
 		parentOffset := binary.LittleEndian.Uint16(s[sizeOfCommonShredHeader:sizeOfParent])
 		if slot < uint64(parentOffset) {
-			return nil, fmt.Errorf("shred slot %d is smaller than parent_offset %d", slot, parentOffset)
+			return PartialShred{}, fmt.Errorf("shred slot %d is smaller than parent_offset %d", slot, parentOffset)
 		}
 		actualParentSlot := slot - uint64(parentOffset)
 		if slot < actualParentSlot {
-			return nil, fmt.Errorf("shred slot %v is smaller than parent %v", slot, actualParentSlot)
+			return PartialShred{}, fmt.Errorf("shred slot %v is smaller than parent %v", slot, actualParentSlot)
 		}
 	}
 
-	return &PartialShred{
+	return PartialShred{
 		Raw:     s,
 		Variant: shredVariant,
 		Slot:    slot,
@@ -232,18 +238,17 @@ func ParseShredPartial(s []byte) (*PartialShred, error) {
 	}, nil
 }
 
-func ShredKey(slot uint64, index uint32, variant *ShredVariantByte) string {
-	var builder strings.Builder
-	builder.WriteString(strconv.Itoa(int(slot)))
-	builder.WriteString(strconv.Itoa(int(index)))
-	// not calling variant.String() to avoid map access to improve conversion performance
-	// this will essentially write unique non-ascii char to keep the diff between different
-	// shred variants
-	builder.WriteString(string(variant.Variant))
-	return builder.String()
+func ShredKey(slot uint64, index uint32, variant ShredVariantByte) string {
+	// one heap allocation here for the buf’s backing array
+	buf := make([]byte, 0, 13)
+	buf = strconv.AppendInt(buf, int64(slot), 10)
+	buf = strconv.AppendInt(buf, int64(index), 10)
+	buf = append(buf, variant.Variant)
+	// no copy—string just reuses buf’s memory
+	return unsafe.String(unsafe.SliceData(buf), len(buf))
 }
 
-func validateShredSize(sz int, shredVariant *ShredVariantByte) error {
+func validateShredSize(sz int, shredVariant ShredVariantByte) error {
 	switch shredVariant.Variant {
 	case LegacyCode, LegacyData:
 		if sz != sizeOfLegacyCodeShredPayload {
@@ -270,4 +275,9 @@ func ValidateShredSizeSimple(size int) error {
 	}
 
 	return nil
+}
+
+func ShouldSample(shred PartialShred) bool {
+	// Every ~30sec
+	return shred.Slot%75 == 0 && shred.Index == 100
 }

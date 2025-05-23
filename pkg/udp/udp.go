@@ -125,10 +125,10 @@ type FDConn struct {
 	open *atomic.Bool
 }
 
-func (c *FDConn) UnsafeReadFrom(b []byte) (int, *Addr, error) {
+func (c *FDConn) UnsafeReadFrom(b []byte) (int, Addr, error) {
 	n, _, _, a, err := syscall.Recvmsg(c.fd, b, nil, 0)
 	if err != nil {
-		return 0, nil, fmt.Errorf("recvmsg: %s", err)
+		return 0, Addr{}, fmt.Errorf("recvmsg: %s", err)
 	}
 
 	addr, err := NewAddr(a)
@@ -157,20 +157,24 @@ type Addr struct {
 	NetipAddr netip.Addr
 }
 
-func NewAddr(sa syscall.Sockaddr) (*Addr, error) {
+func (a Addr) IsZero() bool {
+	return a == Addr{}
+}
+
+func NewAddr(sa syscall.Sockaddr) (Addr, error) {
 	switch addr := sa.(type) {
 	case *syscall.SockaddrInet4:
-		return &Addr{
+		return Addr{
 			SockAddr:  sa,
 			NetipAddr: netip.AddrFrom4(addr.Addr),
 		}, nil
 	case *syscall.SockaddrInet6:
-		return &Addr{
+		return Addr{
 			SockAddr:  sa,
 			NetipAddr: netip.AddrFrom16(addr.Addr),
 		}, nil
 	default:
-		return nil, errors.New("unknown address format")
+		return Addr{}, errors.New("unknown address format")
 	}
 }
 
