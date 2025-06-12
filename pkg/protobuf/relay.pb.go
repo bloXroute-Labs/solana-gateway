@@ -22,11 +22,13 @@ const (
 )
 
 type RegisterRequest struct {
-	state                protoimpl.MessageState `protogen:"open.v1"`
-	AuthHeader           string                 `protobuf:"bytes,1,opt,name=auth_header,json=authHeader,proto3" json:"auth_header,omitempty"`
-	Version              string                 `protobuf:"bytes,2,opt,name=version,proto3" json:"version,omitempty"`
-	ServerPort           int64                  `protobuf:"varint,3,opt,name=server_port,json=serverPort,proto3" json:"server_port,omitempty"`
-	GatewayConfiguration []byte                 `protobuf:"bytes,4,opt,name=gateway_configuration,json=gatewayConfiguration,proto3" json:"gateway_configuration,omitempty"`
+	state      protoimpl.MessageState `protogen:"open.v1"`
+	AuthHeader string                 `protobuf:"bytes,1,opt,name=auth_header,json=authHeader,proto3" json:"auth_header,omitempty"`
+	// Deprecated: Marked as deprecated in relay.proto.
+	Version string `protobuf:"bytes,2,opt,name=version,proto3" json:"version,omitempty"`
+	// Deprecated: Marked as deprecated in relay.proto.
+	ServerPort           int64  `protobuf:"varint,3,opt,name=server_port,json=serverPort,proto3" json:"server_port,omitempty"`
+	GatewayConfiguration []byte `protobuf:"bytes,4,opt,name=gateway_configuration,json=gatewayConfiguration,proto3" json:"gateway_configuration,omitempty"`
 	unknownFields        protoimpl.UnknownFields
 	sizeCache            protoimpl.SizeCache
 }
@@ -68,6 +70,7 @@ func (x *RegisterRequest) GetAuthHeader() string {
 	return ""
 }
 
+// Deprecated: Marked as deprecated in relay.proto.
 func (x *RegisterRequest) GetVersion() string {
 	if x != nil {
 		return x.Version
@@ -75,6 +78,7 @@ func (x *RegisterRequest) GetVersion() string {
 	return ""
 }
 
+// Deprecated: Marked as deprecated in relay.proto.
 func (x *RegisterRequest) GetServerPort() int64 {
 	if x != nil {
 		return x.ServerPort
@@ -249,12 +253,12 @@ var File_relay_proto protoreflect.FileDescriptor
 
 const file_relay_proto_rawDesc = "" +
 	"\n" +
-	"\vrelay.proto\x12\x05relay\x1a\vtypes.proto\"\xa2\x01\n" +
+	"\vrelay.proto\x12\x05relay\x1a\vtypes.proto\"\xaa\x01\n" +
 	"\x0fRegisterRequest\x12\x1f\n" +
 	"\vauth_header\x18\x01 \x01(\tR\n" +
-	"authHeader\x12\x18\n" +
-	"\aversion\x18\x02 \x01(\tR\aversion\x12\x1f\n" +
-	"\vserver_port\x18\x03 \x01(\x03R\n" +
+	"authHeader\x12\x1c\n" +
+	"\aversion\x18\x02 \x01(\tB\x02\x18\x01R\aversion\x12#\n" +
+	"\vserver_port\x18\x03 \x01(\x03B\x02\x18\x01R\n" +
 	"serverPort\x123\n" +
 	"\x15gateway_configuration\x18\x04 \x01(\fR\x14gatewayConfiguration\"\xa0\x01\n" +
 	"\x10RegisterResponse\x12\x1f\n" +

@@ -283,3 +283,20 @@ func SockAddrFromNetipAddrPort(addr netip.AddrPort) (syscall.Sockaddr, error) {
 	ip := addr.Addr().As4()
 	return &syscall.SockaddrInet4{Port: int(addr.Port()), Addr: [4]byte{ip[0], ip[1], ip[2], ip[3]}}, nil
 }
+
+func UDPAddrFromSockAddr(sa syscall.Sockaddr) net.UDPAddr {
+	switch addr := sa.(type) {
+	case *syscall.SockaddrInet4:
+		return net.UDPAddr{
+			IP:   net.IP(addr.Addr[:]),
+			Port: addr.Port,
+		}
+	case *syscall.SockaddrInet6:
+		return net.UDPAddr{
+			IP:   net.IP(addr.Addr[:]),
+			Port: addr.Port,
+		}
+	}
+
+	return net.UDPAddr{}
+}

@@ -120,7 +120,7 @@ func (s *NetworkListener) Recv(ch chan<- Shred) {
 				continue
 			}
 
-			shred, err := solana.ParseShredPartial(sp.Payload)
+			shred, err := solana.ParseShredPartial(sp.Payload, sp.Length)
 			if err != nil {
 				s.lg.Tracef("%s: partial parse shred: %s", pd, err)
 

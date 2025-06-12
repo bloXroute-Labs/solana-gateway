@@ -10,6 +10,7 @@ import (
 	_ "net/http/pprof"
 	"os"
 	"os/signal"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -41,10 +42,6 @@ const (
 	defaultVersion = "0.2.0h"
 	localhost      = "127.0.0.1"
 
-	// environment variable to run gateway in passive mode
-	//
-	// "passive mode" means to be passive in relation to the solana-validator
-	// it only forwards [Solana -> OFR] traffic, but not [OFR -> Solana]
 	gatewayVersionEnv     = "SG_VERSION"
 	numOfTraderAPISToSend = 2
 )
@@ -142,7 +139,7 @@ func main() {
 func run(
 	cfg *config.Gateway,
 ) error {
-	if !cfg.NoValidator && cfg.SniffInterface == "" {
+	if !cfg.NoValidator && !cfg.SubmissionOnly && cfg.SniffInterface == "" {
 		log.Fatalln("network-interface can't be empty")
 	}
 	version := os.Getenv(gatewayVersionEnv)
@@ -236,7 +233,7 @@ func run(
 
 	var nl *netlisten.NetworkListener
 	// assign net listener only when running with validator
-	if !cfg.NoValidator {
+	if !cfg.NoValidator && !cfg.SubmissionOnly {
 		var outPorts []int
 		if cfg.StakedNode {
 			// If the TVU broadcast port is not specified we start listening to
@@ -272,7 +269,20 @@ func run(
 		return err
 	}
 
-	registrar := gateway.NewOFRRegistrar(ctx, pb.NewRelayClient(conn), cfg, version, serverFd.Port)
+	cfg.RuntimeEnnvironment = config.RuntimeEnvironment{
+		Version:    version,
+		ServerPort: serverFd.Port,
+		Arguments:  strings.Join(os.Args[1:], " "),
+	}
+
+	// Ensure we sanitize the auth header before logging it anywhere.
+	re := regexp.MustCompile(`(?mi)-{1,2}auth-header[\s=]{1}(\S*)`)
+	for _, match := range re.FindAllString(cfg.RuntimeEnnvironment.Arguments, -1) {
+		fmt.Println("Match:", match)
+		cfg.RuntimeEnnvironment.Arguments = strings.ReplaceAll(cfg.RuntimeEnnvironment.Arguments, match, "-auth-header=REDACTED")
+	}
+
+	registrar := gateway.NewOFRRegistrar(ctx, pb.NewRelayClient(conn), cfg)
 
 	if cfg.SubmissionOnly {
 		gwopts = append(gwopts, gateway.PassiveMode())

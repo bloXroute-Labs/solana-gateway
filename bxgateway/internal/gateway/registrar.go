@@ -14,20 +14,16 @@ type Registrar interface {
 }
 
 type ofrRegistrar struct {
-	ctx        context.Context
-	client     proto.RelayClient
-	cfg        *config.Gateway
-	version    string
-	serverPort int64
+	ctx    context.Context
+	client proto.RelayClient
+	cfg    *config.Gateway
 }
 
-func NewOFRRegistrar(ctx context.Context, client proto.RelayClient, cfg *config.Gateway, version string, serverPort int64) Registrar {
+func NewOFRRegistrar(ctx context.Context, client proto.RelayClient, cfg *config.Gateway) Registrar {
 	return &ofrRegistrar{
-		ctx:        ctx,
-		client:     client,
-		cfg:        cfg,
-		version:    version,
-		serverPort: serverPort,
+		ctx:    ctx,
+		client: client,
+		cfg:    cfg,
 	}
 }
 
@@ -39,8 +35,8 @@ func (r *ofrRegistrar) Register() (*proto.RegisterResponse, error) {
 	}
 	rsp, err := r.client.Register(r.ctx, &proto.RegisterRequest{
 		AuthHeader:           r.cfg.AuthHeader,
-		Version:              r.version,
-		ServerPort:           r.serverPort,
+		Version:              r.cfg.RuntimeEnnvironment.Version,
+		ServerPort:           r.cfg.RuntimeEnnvironment.ServerPort,
 		GatewayConfiguration: bz,
 	})
 	if err != nil {
