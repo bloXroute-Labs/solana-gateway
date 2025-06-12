@@ -40,8 +40,8 @@ func (f *TraderAPIForwarder) Update(txPropagationConfig *proto.TxPropagationConf
 		return
 	}
 
-	var traderAPIs = txPropagationConfig.GetTraderApis()
-	var newForwarders = make([]*traderAPIForwarder, 0, len(traderAPIs))
+	traderAPIs := txPropagationConfig.GetTraderApis()
+	newForwarders := make([]*traderAPIForwarder, 0, len(traderAPIs))
 	var wg sync.WaitGroup
 	wg.Add(len(traderAPIs))
 
@@ -68,9 +68,10 @@ func (f *TraderAPIForwarder) Update(txPropagationConfig *proto.TxPropagationConf
 	}
 
 	f.forwarders = newForwarders
+	f.nParallel = int(txPropagationConfig.GetNumTraderApisParallel())
 	f.mx.Unlock()
 
-	f.lg.Infof("updated TraderAPIForwarder with %d forwarders", len(newForwarders))
+	f.lg.Infof("updated TraderAPIForwarder with %d forwarders, parallel use: %d", len(newForwarders), f.nParallel)
 }
 
 func (f *TraderAPIForwarder) Forward(rawBody []byte) {
@@ -101,7 +102,7 @@ type traderAPIForwarder struct {
 }
 
 func newTraderAPIForwarder(lg logger.Logger, taURL string, wg *sync.WaitGroup) *traderAPIForwarder {
-	var fwd = &traderAPIForwarder{
+	fwd := &traderAPIForwarder{
 		lg:         lg,
 		url:        taURL,
 		httpClient: newHTTPClient(),
@@ -115,7 +116,7 @@ func newTraderAPIForwarder(lg logger.Logger, taURL string, wg *sync.WaitGroup) *
 			return
 		}
 
-		var pingAddr = parsedURL.Host
+		pingAddr := parsedURL.Host
 
 		// if the host is direct IP instead of a domain, we need to ping the IP
 		if strings.Contains(parsedURL.Host, ":") {

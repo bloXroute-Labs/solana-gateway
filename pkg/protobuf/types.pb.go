@@ -22,11 +22,12 @@ const (
 )
 
 type TxPropagationConfig struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	TraderApis    []string               `protobuf:"bytes,1,rep,name=trader_apis,json=traderApis,proto3" json:"trader_apis,omitempty"`
-	TxForwarders  []*TxForwarder         `protobuf:"bytes,2,rep,name=tx_forwarders,json=txForwarders,proto3" json:"tx_forwarders,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state                 protoimpl.MessageState `protogen:"open.v1"`
+	TraderApis            []string               `protobuf:"bytes,1,rep,name=trader_apis,json=traderApis,proto3" json:"trader_apis,omitempty"`
+	TxForwarders          []*TxForwarder         `protobuf:"bytes,2,rep,name=tx_forwarders,json=txForwarders,proto3" json:"tx_forwarders,omitempty"`
+	NumTraderApisParallel uint32                 `protobuf:"varint,3,opt,name=num_trader_apis_parallel,json=numTraderApisParallel,proto3" json:"num_trader_apis_parallel,omitempty"`
+	unknownFields         protoimpl.UnknownFields
+	sizeCache             protoimpl.SizeCache
 }
 
 func (x *TxPropagationConfig) Reset() {
@@ -71,6 +72,13 @@ func (x *TxPropagationConfig) GetTxForwarders() []*TxForwarder {
 		return x.TxForwarders
 	}
 	return nil
+}
+
+func (x *TxPropagationConfig) GetNumTraderApisParallel() uint32 {
+	if x != nil {
+		return x.NumTraderApisParallel
+	}
+	return 0
 }
 
 type TxForwarder struct {
@@ -129,11 +137,12 @@ var File_types_proto protoreflect.FileDescriptor
 
 const file_types_proto_rawDesc = "" +
 	"\n" +
-	"\vtypes.proto\x12\x05types\"o\n" +
+	"\vtypes.proto\x12\x05types\"\xa8\x01\n" +
 	"\x13TxPropagationConfig\x12\x1f\n" +
 	"\vtrader_apis\x18\x01 \x03(\tR\n" +
 	"traderApis\x127\n" +
-	"\rtx_forwarders\x18\x02 \x03(\v2\x12.types.TxForwarderR\ftxForwarders\"R\n" +
+	"\rtx_forwarders\x18\x02 \x03(\v2\x12.types.TxForwarderR\ftxForwarders\x127\n" +
+	"\x18num_trader_apis_parallel\x18\x03 \x01(\rR\x15numTraderApisParallel\"R\n" +
 	"\vTxForwarder\x12\x12\n" +
 	"\x04addr\x18\x01 \x01(\tR\x04addr\x12/\n" +
 	"\x13supported_protocols\x18\x02 \x03(\tR\x12supportedProtocolsB3Z1github.com/bloXroute-Labs/solana-gateway/pkg/protobufb\x06proto3"

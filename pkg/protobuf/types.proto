@@ -5,6 +5,7 @@ option go_package = "github.com/bloXroute-Labs/solana-gateway/pkg/protobuf";
 message TxPropagationConfig {
     repeated string trader_apis = 1;
     repeated TxForwarder tx_forwarders = 2;
+    uint32 num_trader_apis_parallel = 3;
 }
 
 message TxForwarder {

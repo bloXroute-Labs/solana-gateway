@@ -135,10 +135,11 @@ type Shred struct {
 
 // PartialShred has only information about shred type, slot and index, Raw is full shred
 type PartialShred struct {
-	Raw     [UDPShredSize]byte
-	Variant ShredVariantByte
-	Slot    uint64
-	Index   uint32
+	Raw      [1228]byte
+	DataSize int
+	Variant  ShredVariantByte
+	Slot     uint64
+	Index    uint32
 }
 
 func ParseShred(s []byte) (Shred, error) {
@@ -196,8 +197,8 @@ func ParseShred(s []byte) (Shred, error) {
 	}, nil
 }
 
-func ParseShredPartial(s [UDPShredSize]byte) (PartialShred, error) {
-	if len(s) < sizeOfParent {
+func ParseShredPartial(s [1228]byte, size int) (PartialShred, error) {
+	if size < sizeOfParent {
 		return PartialShred{}, fmt.Errorf("shred size too small: %d", len(s))
 	}
 
@@ -206,7 +207,7 @@ func ParseShredPartial(s [UDPShredSize]byte) (PartialShred, error) {
 		return PartialShred{}, err
 	}
 
-	if err := validateShredSize(len(s), shredVariant); err != nil {
+	if err := validateShredSize(size, shredVariant); err != nil {
 		return PartialShred{}, err
 	}
 	index := binary.LittleEndian.Uint32(
@@ -231,10 +232,11 @@ func ParseShredPartial(s [UDPShredSize]byte) (PartialShred, error) {
 	}
 
 	return PartialShred{
-		Raw:     s,
-		Variant: shredVariant,
-		Slot:    slot,
-		Index:   index,
+		Raw:      s,
+		DataSize: size,
+		Variant:  shredVariant,
+		Slot:     slot,
+		Index:    index,
 	}, nil
 }
 

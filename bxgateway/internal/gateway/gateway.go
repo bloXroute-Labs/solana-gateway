@@ -280,7 +280,7 @@ func (g *Gateway) processShred(i int, broadcastCh chan shredData) (packet shredP
 	}
 
 	now := time.Now()
-	shred, err := solana.ParseShredPartial(packet.payload)
+	shred, err := solana.ParseShredPartial(packet.payload, packet.length)
 	if err != nil {
 		g.lg.Errorf("ofr: failed to analyze packet from ofr: %s", err)
 		return

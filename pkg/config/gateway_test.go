@@ -42,6 +42,12 @@ func TestGatewayMarshal(t *testing.T) {
 		t.Fatalf("json.Unmarshal failed: %v", err)
 	}
 
+	if g2.AuthHeader != "" {
+		t.Errorf("Unmarshaled Gateway AuthHeader should be empty, got: %s", g.AuthHeader)
+	}
+
+	// ensure we perform deep equal against sanitized struct
+	g.AuthHeader = ""
 	if !reflect.DeepEqual(*g, g2) {
 		t.Errorf("Unmarshaled Gateway does not match original.\nGot: %+v\nWant: %+v", g2, *g)
 	}
@@ -82,6 +88,12 @@ func TestGatewayUnmarshal(t *testing.T) {
 		t.Fatalf("Unmarshal failed: %v", err)
 	}
 
+	if g.AuthHeader != "" {
+		t.Errorf("Unmarshaled Gateway AuthHeader should be empty, got: %s", g.AuthHeader)
+	}
+
+	// ensure we perform deep equal against sanitized struct
+	orig.AuthHeader = ""
 	if !reflect.DeepEqual(orig, g) {
 		t.Errorf("Unmarshaled Gateway does not match original.\nGot: %+v\nWant: %+v", g, orig)
 	}
@@ -122,6 +134,12 @@ func TestGatewayUnmarshalPtr(t *testing.T) {
 		t.Fatalf("Unmarshal failed: %v", err)
 	}
 
+	if g.AuthHeader != "" {
+		t.Errorf("Unmarshaled Gateway AuthHeader should be empty, got: %s", g.AuthHeader)
+	}
+
+	// ensure we perform deep equal against sanitized struct
+	orig.AuthHeader = ""
 	if !reflect.DeepEqual(orig, *g) {
 		t.Errorf("Unmarshaled Gateway does not match original.\nGot: %+v\nWant: %+v", g, orig)
 	}

@@ -11,8 +11,8 @@ service Relay {
 
 message RegisterRequest {
     string auth_header = 1;
-    string version = 2;
-    int64 server_port = 3;
+    string version = 2 [deprecated=true];
+    int64 server_port = 3 [deprecated=true];
     bytes gateway_configuration = 4;
 }
 

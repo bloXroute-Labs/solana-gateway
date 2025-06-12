@@ -18,7 +18,7 @@ const (
 func TestValidShred(t *testing.T) {
 	data, err := hex.DecodeString(validShred)
 	require.NoError(t, err)
-	shred, err := ParseShredPartial(toFixedArray1228(data))
+	shred, err := ParseShredPartial(toFixedArray1228(data), len(data))
 	assert.NoError(t, err)
 	assert.NotEqual(t, zeroShred, shred.Raw)
 }
@@ -26,7 +26,7 @@ func TestValidShred(t *testing.T) {
 func TestInvalidShred(t *testing.T) {
 	data, err := hex.DecodeString(invalidShred)
 	require.NoError(t, err)
-	shred, err := ParseShredPartial(toFixedArray1228(data))
+	shred, err := ParseShredPartial(toFixedArray1228(data), len(data))
 	assert.Error(t, err)
 	require.Contains(t, err.Error(), "shred index is too big")
 	assert.NotNil(t, shred)
