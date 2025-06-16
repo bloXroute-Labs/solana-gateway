@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"time"
 
 	"github.com/bloXroute-Labs/solana-gateway/bxgateway/internal/txfwd"
 	"github.com/bloXroute-Labs/solana-gateway/pkg/logger"
@@ -40,11 +41,17 @@ func Run(
 }
 
 func (s *HTTPServer) start() error {
-	http.HandleFunc("/submit", func(w http.ResponseWriter, r *http.Request) {
-		s.handleSubmit(w, r)
-	})
+	mux := http.NewServeMux()
+	mux.HandleFunc("/submit", s.handleSubmit)
+
+	server := &http.Server{
+		Addr:        fmt.Sprintf(":%d", s.port),
+		Handler:     mux,
+		IdleTimeout: 10 * time.Minute, // Controls Keep-Alive duration
+	}
+
 	s.lg.Infof("starting http server on port %d", s.port)
-	return http.ListenAndServe(fmt.Sprintf(":%d", s.port), nil)
+	return server.ListenAndServe()
 }
 
 func (s *HTTPServer) handleSubmit(w http.ResponseWriter, r *http.Request) {
