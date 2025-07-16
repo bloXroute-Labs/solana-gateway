@@ -2,6 +2,7 @@ package txfwd
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"io"
 	"net"
@@ -12,9 +13,11 @@ import (
 	"sync"
 	"time"
 
-	"github.com/bloXroute-Labs/solana-gateway/pkg/logger"
-	proto "github.com/bloXroute-Labs/solana-gateway/pkg/protobuf"
 	probing "github.com/prometheus-community/pro-bing"
+
+	"github.com/bloXroute-Labs/solana-gateway/pkg/logger"
+	"github.com/bloXroute-Labs/solana-gateway/pkg/ofr"
+	proto "github.com/bloXroute-Labs/solana-gateway/pkg/protobuf"
 )
 
 type TraderAPIForwarder struct {
@@ -64,7 +67,7 @@ func (f *TraderAPIForwarder) Update(txPropagationConfig *proto.TxPropagationConf
 
 	f.mx.Lock()
 	for _, fwd := range f.forwarders {
-		fwd.httpClient.CloseIdleConnections()
+		fwd.close()
 	}
 
 	f.forwarders = newForwarders
@@ -86,7 +89,9 @@ func (f *TraderAPIForwarder) Forward(rawBody []byte) {
 		go func(forwarder *traderAPIForwarder) {
 			err := forwarder.forward(rawBody, f.authHeader)
 			if err != nil {
-				f.lg.Errorf("failed to forward tx %s to TraderAPI %s: %v", string(rawBody), forwarder.url, err)
+				if forwarder.successRate() < 0.5 {
+					f.lg.Errorf("failed to forward tx %s to TraderAPI %s: %v", string(rawBody), forwarder.url, err)
+				}
 			} else {
 				f.lg.Tracef("Submitted tx %s to TraderAPI %s", string(rawBody), forwarder.url)
 			}
@@ -95,17 +100,30 @@ func (f *TraderAPIForwarder) Forward(rawBody []byte) {
 }
 
 type traderAPIForwarder struct {
+	ctx    context.Context
+	cancel context.CancelFunc
+
 	lg         logger.Logger
 	url        string
 	httpClient *http.Client
 	ping       *time.Duration
+
+	successCounter *ofr.SuccessCounter
 }
 
 func newTraderAPIForwarder(lg logger.Logger, taURL string, wg *sync.WaitGroup) *traderAPIForwarder {
+	ctx, cancel := context.WithCancel(context.Background())
+
+	successCounter := ofr.NewSuccessCounter(lg, fmt.Sprintf("TraderAPIForwarder: %s", taURL), 10*time.Minute)
+	go successCounter.Print(ctx)
+
 	fwd := &traderAPIForwarder{
-		lg:         lg,
-		url:        taURL,
-		httpClient: newHTTPClient(),
+		ctx:            ctx,
+		cancel:         cancel,
+		lg:             lg,
+		url:            taURL,
+		httpClient:     newHTTPClient(),
+		successCounter: successCounter,
 	}
 
 	go func() {
@@ -140,8 +158,15 @@ func newTraderAPIForwarder(lg logger.Logger, taURL string, wg *sync.WaitGroup) *
 
 		err = pinger.Run() // blocks until finished.
 		if err != nil {
-			lg.Warnf("failed to ping traderAPIForwarder: failed to run pinger for %s (pingAddr: %s): %v", taURL, pingAddr, err)
-			return
+			// try to ping without privileged mode
+			pinger.SetPrivileged(false)
+
+			errR := pinger.Run() // blocks until finished.
+			if errR != nil {
+				// log the original error
+				lg.Warnf("failed to ping traderAPIForwarder: failed to run pinger for %s (pingAddr: %s): %v", taURL, pingAddr, err)
+				return
+			}
 		}
 
 		stats := pinger.Statistics() // get send/receive/duplicate/rtt stats
@@ -154,6 +179,15 @@ func newTraderAPIForwarder(lg logger.Logger, taURL string, wg *sync.WaitGroup) *
 	}()
 
 	return fwd
+}
+
+func (f *traderAPIForwarder) successRate() float64 {
+	return f.successCounter.SuccessRate()
+}
+
+func (f *traderAPIForwarder) close() {
+	f.cancel()
+	f.httpClient.CloseIdleConnections()
 }
 
 func (f *traderAPIForwarder) forward(rawBody []byte, authHeader string) error {
@@ -173,12 +207,16 @@ func (f *traderAPIForwarder) forward(rawBody []byte, authHeader string) error {
 
 	responseBody, err := io.ReadAll(rsp.Body)
 	if err != nil {
+		f.successCounter.RecordFailure()
 		return fmt.Errorf("failed to read response from Trader API: %w", err)
 	}
 
 	if rsp.StatusCode != http.StatusOK {
+		f.successCounter.RecordFailure()
 		return fmt.Errorf("invalid response from Trader API: %d (%s), response: %s", rsp.StatusCode, rsp.Status, string(responseBody))
 	}
+
+	f.successCounter.RecordSuccess()
 
 	return nil
 }

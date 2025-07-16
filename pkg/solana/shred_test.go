@@ -33,6 +33,54 @@ func TestInvalidShred(t *testing.T) {
 	assert.Equal(t, zeroShred, shred.Raw)
 }
 
+func TestShredKey(t *testing.T) {
+	keys := make(map[uint64]bool)
+
+	variants := []ShredVariantByte{
+		{Variant: LegacyCode},
+		{Variant: LegacyData},
+		{Variant: MerkleCode},
+		{Variant: MerkleCodeChained},
+		{Variant: MerkleCodeResigned},
+		{Variant: MerkleData},
+		{Variant: MerkleDataChained},
+		{Variant: MerkleDataResigned},
+	}
+
+	// Test multiple combinations to ensure no collisions
+	currentSlot := uint64(348676101)
+	for _, variant := range variants {
+		for slot := currentSlot; slot < currentSlot+1000; slot++ {
+			for index := uint32(0); index < 100; index++ {
+				key := ShredKey(slot, index, variant)
+
+				// Ensure no collision
+				assert.False(t, keys[key], "Collision detected for slot=%d, index=%d, variant=%s", slot, index, variant.VariantString)
+				keys[key] = true
+
+				// Test deterministic - same inputs should produce same key
+				key2 := ShredKey(slot, index, variant)
+				assert.Equal(t, key, key2, "Function is not deterministic")
+			}
+		}
+	}
+
+	// Test edge cases - based on actual bit allocation
+	// With slot << 28, max slot is 2^36 - 1 = 68719476735 (36 bits available)
+	// With index << 8, max index is 2^20 - 1 = 1048575 (20 bits available)
+	maxSlot := uint64(0xFFFFFFFFF) // 36 bits max (68719476735)
+	maxIndex := uint32(0xFFFFF)    // 20 bits max (1048575)
+
+	key1 := ShredKey(maxSlot, maxIndex, variants[0])
+	key2 := ShredKey(maxSlot, maxIndex, variants[1])
+	assert.NotEqual(t, key1, key2, "Different variants should produce different keys")
+
+	// Test that we don't have collisions at boundaries
+	key3 := ShredKey(maxSlot, 0, variants[0])
+	key4 := ShredKey(0, maxIndex, variants[0])
+	assert.NotEqual(t, key3, key4, "Max slot with min index should differ from min slot with max index")
+}
+
 func toFixedArray1228(b []byte) [1228]byte {
 	var arr [1228]byte
 	copy(arr[:], b)

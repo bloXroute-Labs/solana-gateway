@@ -256,7 +256,7 @@ type shredData struct {
 	src   netip.Addr
 }
 
-func (g *Gateway) processShred(i int, broadcastCh chan shredData) (packet shredPacket) {
+func (g *Gateway) processShred(broadcastCh chan shredData) (packet shredPacket) {
 	n, addr, err := g.serverFd.UnsafeReadFrom(packet.payload[:])
 	if err != nil {
 		g.lg.Errorf("read from udp: %s", err)
@@ -287,10 +287,6 @@ func (g *Gateway) processShred(i int, broadcastCh chan shredData) (packet shredP
 	}
 
 	g.lg.Tracef("gateway: recv shred, slot: %d, index: %d, from: %s", shred.Slot, shred.Index, addr.NetipAddr.String())
-	if i == 1e5 {
-		g.lg.Debugf("health: receiveShredsFromOFR 100K: broadcast buf: %d", len(broadcastCh))
-		i = 0
-	}
 
 	g.stats.RecordNewShred(addr.NetipAddr, "OFR")
 
@@ -321,7 +317,12 @@ func (g *Gateway) receiveShredsFromOFR(broadcastCh chan shredData) {
 		default:
 		}
 
-		g.processShred(i, broadcastCh)
+		g.processShred(broadcastCh)
+
+		if i == 1e5 {
+			g.lg.Debugf("health: receiveShredsFromOFR 100K: broadcast buf: %d", len(broadcastCh))
+			i = 0 // reset the counter
+		}
 	}
 }
 
@@ -380,32 +381,33 @@ func (g *Gateway) broadcastShredsToOFR(ch <-chan netlisten.Shred) {
 }
 
 func (g *Gateway) reRegister() {
-	wait := noTrafficThreshold
-
 	// start monitoring if we need to register again
 	g.noTrafficTicker = time.NewTicker(noTrafficThreshold)
+
+	var failedCount int
 
 	for {
 		select {
 		case <-g.ctx.Done():
 			return
 		case <-g.noTrafficTicker.C:
-			g.lg.Infof("no traffic from OFR: re-registering gateway...")
+			failedCount++
+
+			if failedCount%3 == 0 {
+				g.lg.Warnf("no traffic from OFR: make sure ports are opened https://docs.bloxroute.com/solana/optimized-feed-relay/requirements")
+			} else {
+				g.lg.Infof("no traffic from OFR: re-registering gateway...")
+
+			}
 
 			addr, err := g.Register()
 			if err != nil {
-				g.lg.Errorf("no traffic from OFR: re-register: %s", err)
+				g.lg.Errorf("no traffic from OFR: re-registering failed: %s", err)
 
-				if wait < time.Hour {
-					wait = 2 * wait
-				}
-
-				g.noTrafficTicker.Reset(wait)
+				g.noTrafficTicker.Reset(noTrafficThreshold)
 
 				continue
 			}
-
-			wait = noTrafficThreshold
 
 			// reset the ticker after the callback is called
 			// to avoid calling the callback multiple times

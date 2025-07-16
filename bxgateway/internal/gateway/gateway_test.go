@@ -91,7 +91,7 @@ func TestProcessShred(t *testing.T) {
 			err = gw.serverFd.UnsafeWrite(data, addr.SockAddr)
 			assert.NoError(t, err)
 
-			gw.processShred(1, channel)
+			gw.processShred(channel)
 
 			assert.Equal(t, tt.expectedChannelLen, len(channel))
 
