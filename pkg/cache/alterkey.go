@@ -9,15 +9,15 @@ import (
 // Cleanup is done it 2phases so after first clean previous values are
 // preserved and may be accessed until the second one.
 type AlterKey struct {
-	current map[string]struct{}
-	altered map[string]struct{}
+	current map[uint64]struct{}
+	altered map[uint64]struct{}
 	mx      sync.Mutex
 }
 
 func NewAlterKey(cleanTimeout time.Duration) *AlterKey {
 	c := &AlterKey{
-		current: make(map[string]struct{}),
-		altered: make(map[string]struct{}),
+		current: make(map[uint64]struct{}),
+		altered: make(map[uint64]struct{}),
 		mx:      sync.Mutex{},
 	}
 
@@ -29,7 +29,7 @@ func NewAlterKey(cleanTimeout time.Duration) *AlterKey {
 //
 // Before setting the key it checks if it is present in either
 // current or altered cache and if so - returns false
-func (c *AlterKey) Set(key string) bool {
+func (c *AlterKey) Set(key uint64) bool {
 	c.mx.Lock()
 	defer c.mx.Unlock()
 
@@ -50,7 +50,7 @@ func (c *AlterKey) cleanup(timeout time.Duration) bool {
 		time.Sleep(timeout)
 		c.mx.Lock()
 		c.altered = c.current
-		c.current = make(map[string]struct{}, len(c.current))
+		c.current = make(map[uint64]struct{}, len(c.current))
 		c.mx.Unlock()
 	}
 }

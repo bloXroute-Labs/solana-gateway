@@ -34,6 +34,20 @@ func (p *Packets) ForEach(fn func(Packet)) {
 	}
 }
 
+// Len returns the number of packets in this batch.
+func (p *Packets) Len() int {
+	return len(p.msgs)
+}
+
+// At returns the packet at the given index.
+func (p *Packets) At(i int) Packet {
+	return Packet{
+		Data: ([solana.UDPShredSize]byte)(p.msgs[i].Buffers[0]),
+		Addr: p.msgs[i].Addr.(*net.UDPAddr),
+		Len:  p.msgs[i].N,
+	}
+}
+
 // Free immediately returns the entire batch to the pool, regardless of
 // how many Packet.Free() calls have occurred.
 func (p *Packets) Free() {

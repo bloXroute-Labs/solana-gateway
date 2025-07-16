@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/bloXroute-Labs/solana-gateway/pkg/logger"
+	"github.com/bloXroute-Labs/solana-gateway/pkg/ofr"
 	proto "github.com/bloXroute-Labs/solana-gateway/pkg/protobuf"
 )
 
@@ -32,7 +33,8 @@ type BxForwarder struct {
 type BxForwarderSubmitter interface {
 	Forward(rawTxBase64 string) error
 	Addr() string
-	Close() error
+	Close()
+	SuccessRate() float64
 }
 
 func NewBxForwarder(ctx context.Context, lg logger.Logger) *BxForwarder {
@@ -103,7 +105,9 @@ func (t *BxForwarder) Forward(rawTxBase64 string) {
 			defer wg.Done()
 			err := txfwd.Forward(rawTxBase64)
 			if err != nil {
-				t.lg.Errorf("failed to submit tx %s to %s: %s", rawTxBase64, txfwd.Addr(), err)
+				if txfwd.SuccessRate() < 0.5 {
+					t.lg.Errorf("failed to submit tx %s to %s: %s", rawTxBase64, txfwd.Addr(), err)
+				}
 			} else {
 				t.lg.Tracef("Submitted tx %s to %s", rawTxBase64, txfwd.Addr())
 			}
@@ -131,20 +135,35 @@ func NewBxForwarderSubmitter(ctx context.Context, lg logger.Logger, jwtToken str
 }
 
 type jsonRPCBxForwarder struct {
+	ctx    context.Context
+	cancel context.CancelFunc
+
 	lg         logger.Logger
-	ctx        context.Context
+	url        string
 	jwtToken   string
 	addr       string
 	httpClient *http.Client
+
+	successCounter *ofr.SuccessCounter
 }
 
 func newJSONRPCBxForwarder(ctx context.Context, lg logger.Logger, jwtToken string, txForwarder *proto.TxForwarder) (*jsonRPCBxForwarder, error) {
-	var bxfwd = &jsonRPCBxForwarder{
-		lg:         lg,
-		ctx:        ctx,
-		jwtToken:   jwtToken,
-		addr:       txForwarder.GetAddr(),
-		httpClient: newHTTPClient(),
+	c, cancel := context.WithCancel(ctx)
+
+	url := fmt.Sprintf(jsonRPCURLFormat, txForwarder.GetAddr(), jsonPRCPort)
+
+	successCounter := ofr.NewSuccessCounter(lg, fmt.Sprintf("JSONRPCBxForwarder: %s", url), 10*time.Minute)
+	go successCounter.Print(c)
+
+	bxfwd := &jsonRPCBxForwarder{
+		ctx:            c,
+		cancel:         cancel,
+		lg:             lg,
+		url:            url,
+		jwtToken:       jwtToken,
+		addr:           txForwarder.GetAddr(),
+		httpClient:     newHTTPClient(),
+		successCounter: successCounter,
 	}
 
 	return bxfwd, nil
@@ -154,8 +173,12 @@ const jsonRPCURLFormat = "http://%s:%d"
 const jsonRPCBody = `{"jsonrpc":"2.0","method":"sendTransaction","params":["%s"],"id":1}`
 const jsonPRCPort = 5055
 
+func (f *jsonRPCBxForwarder) SuccessRate() float64 {
+	return f.successCounter.SuccessRate()
+}
+
 func (t *jsonRPCBxForwarder) Forward(rawTxBase64 string) error {
-	rq, err := http.NewRequest(http.MethodPost, fmt.Sprintf(jsonRPCURLFormat, t.addr, jsonPRCPort), bytes.NewBufferString(fmt.Sprintf(jsonRPCBody, rawTxBase64)))
+	rq, err := http.NewRequest(http.MethodPost, t.url, bytes.NewBufferString(fmt.Sprintf(jsonRPCBody, rawTxBase64)))
 	if err != nil {
 		return fmt.Errorf("failed to create request: %s", err)
 	}
@@ -164,6 +187,7 @@ func (t *jsonRPCBxForwarder) Forward(rawTxBase64 string) error {
 
 	rsp, err := t.httpClient.Do(rq)
 	if err != nil {
+		t.successCounter.RecordFailure()
 		return fmt.Errorf("failed to send request: %s", err)
 	}
 
@@ -171,17 +195,20 @@ func (t *jsonRPCBxForwarder) Forward(rawTxBase64 string) error {
 
 	_, err = io.Copy(io.Discard, rsp.Body)
 	if err != nil {
+		t.successCounter.RecordFailure()
 		return fmt.Errorf("failed to discard response body: %s", err)
 	}
+
+	t.successCounter.RecordSuccess()
 
 	return nil
 }
 
 func (t *jsonRPCBxForwarder) Addr() string { return t.addr }
 
-func (t *jsonRPCBxForwarder) Close() error {
+func (t *jsonRPCBxForwarder) Close() {
+	t.cancel()
 	t.httpClient.CloseIdleConnections()
-	return nil
 }
 
 func newHTTPClient() *http.Client {

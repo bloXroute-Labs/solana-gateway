@@ -5,8 +5,6 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"strconv"
-	"unsafe"
 )
 
 const (
@@ -240,14 +238,12 @@ func ParseShredPartial(s [1228]byte, size int) (PartialShred, error) {
 	}, nil
 }
 
-func ShredKey(slot uint64, index uint32, variant ShredVariantByte) string {
-	// one heap allocation here for the buf’s backing array
-	buf := make([]byte, 0, 13)
-	buf = strconv.AppendInt(buf, int64(slot), 10)
-	buf = strconv.AppendInt(buf, int64(index), 10)
-	buf = append(buf, variant.Variant)
-	// no copy—string just reuses buf’s memory
-	return unsafe.String(unsafe.SliceData(buf), len(buf))
+func ShredKey(slot uint64, index uint32, variant ShredVariantByte) uint64 {
+	// slot: 36 bits (positions 28-63) - supports up to 68,719,476,735
+	//     assuming that 1 slot will stay for 400ms, it have maximum capacity of 800 years
+	// index: 20 bits (positions 8-27) - supports up to 1,048,575
+	// variant: 8 bits (positions 0-7) - supports up to 255
+	return (slot << 28) | (uint64(index) << 8) | uint64(variant.Variant)
 }
 
 func validateShredSize(sz int, shredVariant ShredVariantByte) error {

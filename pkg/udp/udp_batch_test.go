@@ -5,6 +5,7 @@ import (
 	"net"
 	"testing"
 
+	"github.com/bloXroute-Labs/solana-gateway/pkg/solana"
 	"golang.org/x/net/ipv4"
 )
 
@@ -54,10 +55,10 @@ func BenchmarkPacketsForEach(b *testing.B) {
 
 // TestPacketsAtDifferentLengths ensures At returns exact Data slices.
 func TestPacketsAtDifferentLengths(t *testing.T) {
-	lengths := []int{0, 10, 1500}
+	lengths := []int{0, 10, solana.UDPShredSize}
 	msgs := make([]ipv4.Message, len(lengths))
 	for i, l := range lengths {
-		buf := make([]byte, 1500)
+		buf := make([]byte, solana.UDPShredSize)
 		for j := 0; j < l; j++ {
 			buf[j] = byte(i*10 + j)
 		}
@@ -69,11 +70,11 @@ func TestPacketsAtDifferentLengths(t *testing.T) {
 
 	for i, l := range lengths {
 		pkt := p.At(i)
-		if len(pkt.Data) != l {
-			t.Errorf("At(%d): expected length %d, got %d", i, l, len(pkt.Data))
+		if len(pkt.Data[:pkt.Len]) != l {
+			t.Errorf("At(%d): expected length %d, got %d", i, l, len(pkt.Data[:pkt.Len]))
 		}
 		expected := msgs[i].Buffers[0][:l]
-		if !bytes.Equal(pkt.Data, expected) {
+		if !bytes.Equal(pkt.Data[:pkt.Len], expected) {
 			t.Errorf("At(%d): data mismatch", i)
 		}
 		if pkt.Addr.Port != 1234+i {
@@ -87,7 +88,7 @@ func TestPacketsForEach(t *testing.T) {
 	lengths := []int{5, 0, 20}
 	msgs := make([]ipv4.Message, len(lengths))
 	for i, l := range lengths {
-		fullBuf := make([]byte, 1500)
+		fullBuf := make([]byte, solana.UDPShredSize)
 		for j := 0; j < l; j++ {
 			fullBuf[j] = byte(j)
 		}
@@ -100,11 +101,11 @@ func TestPacketsForEach(t *testing.T) {
 	index := 0
 	p.ForEach(func(pkt Packet) {
 		l := lengths[index]
-		if len(pkt.Data) != l {
-			t.Errorf("ForEach pkt %d: expected length %d, got %d", index, l, len(pkt.Data))
+		if len(pkt.Data[:pkt.Len]) != l {
+			t.Errorf("ForEach pkt %d: expected length %d, got %d", index, l, len(pkt.Data[:pkt.Len]))
 		}
 		expected := msgs[index].Buffers[0][:l]
-		if !bytes.Equal(pkt.Data, expected) {
+		if !bytes.Equal(pkt.Data[:pkt.Len], expected) {
 			t.Errorf("ForEach pkt %d: data mismatch", index)
 		}
 		if pkt.Addr.Port != 2000+index {
