@@ -278,7 +278,6 @@ func run(
 	// Ensure we sanitize the auth header before logging it anywhere.
 	re := regexp.MustCompile(`(?mi)-{1,2}auth-header[\s=]{1}(\S*)`)
 	for _, match := range re.FindAllString(cfg.RuntimeEnnvironment.Arguments, -1) {
-		fmt.Println("Match:", match)
 		cfg.RuntimeEnnvironment.Arguments = strings.ReplaceAll(cfg.RuntimeEnnvironment.Arguments, match, "-auth-header=REDACTED")
 	}
 
