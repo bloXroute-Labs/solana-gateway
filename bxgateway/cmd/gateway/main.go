@@ -95,7 +95,7 @@ func main() {
 			&cli.BoolFlag{Name: broadcastFromOfrOnlyFlag, Aliases: []string{"broadcast-from-bdn-only"}, Usage: "Do not send traffic from Solana Node to extra addresses specified with --broadcast-addresses"},
 			&cli.BoolFlag{Name: noValidatorFlag, Value: false, Usage: "Run gw without node, only for elite/ultra accounts"},
 			&cli.BoolFlag{Name: submissionOnlyFlag, Value: false, Usage: "Disable all gw functionality other than tx submission, only for authorized accounts."},
-			&cli.BoolFlag{Name: stakedNodeFlag, Value: false, Usage: "Run as a stacked node"},
+			&cli.BoolFlag{Name: stakedNodeFlag, Value: true, Usage: "Run as a stacked node (true by default)"},
 			&cli.BoolFlag{Name: runHttpServerFlag, Value: false, Usage: "Run http server to submit txs to trader api"},
 			&cli.IntFlag{Name: httpPortFlag, Value: 8080, Required: false, Usage: "HTTP port for submitting txs to trader api"},
 			&cli.StringFlag{Name: dynamicPortRangeFlag, Value: "18889-19888", Usage: "<MIN_PORT-MAX_PORT> Range to use for dynamically assigned ports for shreds propagation over UDP, should not conflict with solana/agave dynamic port range"},
