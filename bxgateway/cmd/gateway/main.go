@@ -19,6 +19,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 
+	"github.com/bloXroute-Labs/solana-gateway/bxgateway/internal/firedancer"
 	"github.com/bloXroute-Labs/solana-gateway/bxgateway/internal/gateway"
 	"github.com/bloXroute-Labs/solana-gateway/bxgateway/internal/http_server"
 	"github.com/bloXroute-Labs/solana-gateway/bxgateway/internal/netlisten"
@@ -70,6 +71,7 @@ const (
 	runHttpServerFlag          = "run-http-server"
 	httpPortFlag               = "http-port"
 	dynamicPortRangeFlag       = "dynamic-port-range"
+	firedancerModeFlag         = "firedancer"
 )
 
 func main() {
@@ -99,6 +101,7 @@ func main() {
 			&cli.BoolFlag{Name: runHttpServerFlag, Value: false, Usage: "Run http server to submit txs to trader api"},
 			&cli.IntFlag{Name: httpPortFlag, Value: 8080, Required: false, Usage: "HTTP port for submitting txs to trader api"},
 			&cli.StringFlag{Name: dynamicPortRangeFlag, Value: "18889-19888", Usage: "<MIN_PORT-MAX_PORT> Range to use for dynamically assigned ports for shreds propagation over UDP, should not conflict with solana/agave dynamic port range"},
+			&cli.BoolFlag{Name: firedancerModeFlag, Value: false, Usage: "Run in firedancer mode"},
 		},
 		Action: func(c *cli.Context) error {
 			return run(
@@ -125,6 +128,7 @@ func main() {
 					DynamicPortRangeString:    c.String(dynamicPortRangeFlag),
 					LogFluentd:                c.Bool(logFluentdFlag),
 					LogFluentdHost:            c.String(logFluentHostFlag),
+					FiredancerMode:            c.Bool(firedancerModeFlag),
 				},
 			)
 		},
@@ -303,6 +307,15 @@ func run(
 
 		gwopts = append(gwopts, opt)
 		lg.Infof("gateway is starting with additional broadcast addrs: %v", cfg.ExtraBroadcastAddrs)
+	}
+
+	if cfg.FiredancerMode {
+		firedancerSniffer, err := firedancer.NewFiredancerSniffer(ctx, lg, stats, alterKeyCache)
+		if err != nil {
+			lg.Errorf("init firedancer sniffer: %s", err)
+			return err
+		}
+		gwopts = append(gwopts, gateway.WithFiredancerSniffer(firedancerSniffer))
 	}
 
 	gw, err := gateway.New(ctx, lg, alterKeyCache, stats, nl, serverFd, fdset, solanaNodeTVUAddr, registrar, gwopts...)

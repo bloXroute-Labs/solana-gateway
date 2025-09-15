@@ -26,6 +26,7 @@ type Gateway struct {
 	DynamicPortRangeString    string             `json:"dynamic_port_range_string"`
 	LogFluentd                bool               `json:"log_fluentd"`
 	LogFluentdHost            string             `json:"log_fluentd_host"`
+	FiredancerMode            bool               `json:"firedancer_mode"`
 }
 
 type RuntimeEnvironment struct {
