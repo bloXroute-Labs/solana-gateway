@@ -6,6 +6,8 @@
 *.dll
 *.so
 *.dylib
+*.a
+*.o
 *.log
 *.test
 *.out

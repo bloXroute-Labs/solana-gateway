@@ -8,6 +8,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/bloXroute-Labs/solana-gateway/bxgateway/internal/firedancer"
 	"github.com/bloXroute-Labs/solana-gateway/bxgateway/internal/netlisten"
 	"github.com/bloXroute-Labs/solana-gateway/bxgateway/internal/txfwd"
 	"github.com/bloXroute-Labs/solana-gateway/pkg/cache"
@@ -32,6 +33,7 @@ type Gateway struct {
 	cache                     *cache.AlterKey
 	stats                     *ofr.Stats
 	nl                        *netlisten.NetworkListener
+	firedancerSniffer         *firedancer.FiredancerSniffer
 	serverFd                  *udp.FDConn // fd receiving traffic from ofr
 	send2OFRFd                *udp.FDConn // fd sending traffic to ofr
 	send2NodeFd               *udp.FDConn // fd sending traffic to node
@@ -48,6 +50,7 @@ type Gateway struct {
 	noValidator               bool
 	passiveMode               bool
 	jwt                       bool
+	statsTicker               *time.Ticker
 }
 
 type shredPacket struct {
@@ -87,6 +90,10 @@ func WithTxForwarders(bxForwarders *txfwd.BxForwarder, traderAPIFwd *txfwd.Trade
 	}
 }
 
+func WithFiredancerSniffer(firedancerSniffer *firedancer.FiredancerSniffer) Option {
+	return func(g *Gateway) { g.firedancerSniffer = firedancerSniffer }
+}
+
 func New(
 	ctx context.Context,
 	lg logger.Logger,
@@ -110,20 +117,26 @@ func New(
 	}
 
 	gw := &Gateway{
-		ctx:              ctx,
-		lg:               lg,
-		cache:            cache,
-		stats:            stats,
-		nl:               nl,
-		serverFd:         serverFd,
-		send2OFRFd:       snd2OFRFd,
-		send2NodeFd:      snd2NodeFd,
-		solanaTVUAddr:    solanaTVUAddr,
-		ofrUDPAddrMx:     &sync.RWMutex{},
-		ofrUDPAddr:       udp.Addr{}, // this addr is returned from registration endpoint
-		passiveMode:      false,
-		registrar:        registrar,
-		refreshJWTTicker: stoppedTicker(), // will be reset if needed during registration
+		ctx:                       ctx,
+		lg:                        lg,
+		cache:                     cache,
+		stats:                     stats,
+		nl:                        nl,
+		serverFd:                  serverFd,
+		send2OFRFd:                snd2OFRFd,
+		send2NodeFd:               snd2NodeFd,
+		solanaTVUAddr:             solanaTVUAddr,
+		ofrUDPAddrMx:              &sync.RWMutex{},
+		ofrUDPAddr:                udp.Addr{}, // this addr is returned from registration endpoint
+		passiveMode:               false,
+		registrar:                 registrar,
+		noTrafficTicker:           stoppedTicker(),
+		refreshJWTTicker:          stoppedTicker(),
+		extraBroadcastAddrs:       []syscall.Sockaddr{},
+		extraBroadcastFromOFROnly: false,
+		noValidator:               false,
+		jwt:                       false,
+		statsTicker:               time.NewTicker(time.Minute),
 	}
 
 	for _, o := range opts {
@@ -228,7 +241,11 @@ func (g *Gateway) Start() {
 		go g.sendAliveMessages()
 	} else {
 		node2OFRCh := make(chan netlisten.Shred, 1e3)
-		go g.nl.Recv(node2OFRCh)
+		if g.firedancerSniffer != nil {
+			go g.firedancerSniffer.Recv(node2OFRCh)
+		} else {
+			go g.nl.Recv(node2OFRCh)
+		}
 		go g.broadcastShredsToOFR(node2OFRCh)
 	}
 }
@@ -287,15 +304,11 @@ func (g *Gateway) processShred(broadcastCh chan shredData) (packet shredPacket) 
 	}
 
 	g.lg.Tracef("gateway: recv shred, slot: %d, index: %d, from: %s", shred.Slot, shred.Index, addr.NetipAddr.String())
-
 	g.stats.RecordNewShred(addr.NetipAddr, "OFR")
-
 	if !g.cache.Set(solana.ShredKey(shred.Slot, shred.Index, shred.Variant)) {
 		return
 	}
-
 	g.stats.RecordUnseenShred(addr.NetipAddr, shred, "OFR")
-
 	select {
 	case broadcastCh <- shredData{
 		packet: packet,
