@@ -15,9 +15,11 @@ type AlterKey struct {
 }
 
 func NewAlterKey(cleanTimeout time.Duration) *AlterKey {
+	// Pre-allocate for expected load: 3.5k shreds/sec * 60sec = ~210k entries
+	expectedSize := 250000
 	c := &AlterKey{
-		current: make(map[uint64]struct{}),
-		altered: make(map[uint64]struct{}),
+		current: make(map[uint64]struct{}, expectedSize),
+		altered: make(map[uint64]struct{}, expectedSize),
 		mx:      sync.Mutex{},
 	}
 
@@ -33,11 +35,12 @@ func (c *AlterKey) Set(key uint64) bool {
 	c.mx.Lock()
 	defer c.mx.Unlock()
 
-	if _, ok := c.altered[key]; ok {
+	// first check current, altered is old entries that are not yet cleaned up
+	if _, ok := c.current[key]; ok {
 		return false
 	}
 
-	if _, ok := c.current[key]; ok {
+	if _, ok := c.altered[key]; ok {
 		return false
 	}
 
@@ -49,8 +52,8 @@ func (c *AlterKey) cleanup(timeout time.Duration) bool {
 	for {
 		time.Sleep(timeout)
 		c.mx.Lock()
-		c.altered = c.current
-		c.current = make(map[uint64]struct{}, len(c.current))
+		clear(c.altered) // Reuse backing array, no allocation
+		c.altered, c.current = c.current, c.altered
 		c.mx.Unlock()
 	}
 }

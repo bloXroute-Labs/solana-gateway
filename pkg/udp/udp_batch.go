@@ -1,16 +1,24 @@
 package udp
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net"
 	"net/netip"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/bloXroute-Labs/solana-gateway/pkg/logger"
 	"github.com/bloXroute-Labs/solana-gateway/pkg/solana"
 	"golang.org/x/net/ipv4"
+	"golang.org/x/sys/unix"
+)
+
+const (
+	SO_REUSEPORT    = 15 // Allow multiple sockets to bind to same port
+	SO_INCOMING_CPU = 49 // Hint kernel which CPU will read from socket
 )
 
 // pool of *Packets, each pre-alloc’d with batchSize slots & 1500-byte buffers.
@@ -69,22 +77,67 @@ func ListenUDPInRange(startPort, endPort int) (*net.UDPConn, int, error) {
 }
 
 func NewServer(lg logger.Logger, port int) (*Conn, error) {
-	conn, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4zero, Port: port})
-	if err != nil {
-		return nil, fmt.Errorf("could not create client: %v", conn)
+	return newServerInternal(lg, port, -1, false)
+}
+
+// NewServerWithReusePort creates a UDP server with SO_REUSEPORT enabled.
+// This allows multiple sockets to bind to the same port for parallel packet processing.
+// cpuCore hints the kernel which CPU will read from this socket (improves cache locality).
+func NewServerWithReusePort(lg logger.Logger, port int, cpuCore int) (*Conn, error) {
+	return newServerInternal(lg, port, cpuCore, true)
+}
+
+func newServerInternal(lg logger.Logger, port int, cpuCore int, reusePort bool) (*Conn, error) {
+	var udpConn *net.UDPConn
+	var err error
+
+	if reusePort {
+		// SO_REUSEPORT must be set BEFORE bind, so use ListenConfig
+		lc := net.ListenConfig{
+			Control: func(network, address string, c syscall.RawConn) error {
+				var opErr error
+				err := c.Control(func(fd uintptr) {
+					// SO_REUSEPORT: allow multiple sockets on same port (must be before bind)
+					opErr = unix.SetsockoptInt(int(fd), unix.SOL_SOCKET, SO_REUSEPORT, 1)
+					if opErr != nil {
+						return
+					}
+
+					// SO_INCOMING_CPU: hint which CPU will read from socket
+					if cpuCore >= 0 {
+						unix.SetsockoptInt(int(fd), unix.SOL_SOCKET, SO_INCOMING_CPU, cpuCore)
+					}
+				})
+				if err != nil {
+					return err
+				}
+				return opErr
+			},
+		}
+
+		conn, err := lc.ListenPacket(context.Background(), "udp4", fmt.Sprintf(":%d", port))
+		if err != nil {
+			return nil, fmt.Errorf("could not create listener: %w", err)
+		}
+		udpConn = conn.(*net.UDPConn)
+	} else {
+		udpConn, err = net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4zero, Port: port})
+		if err != nil {
+			return nil, fmt.Errorf("could not create client: %v", err)
+		}
 	}
 
-	if err := conn.SetReadBuffer(7500000); err != nil {
+	if err := udpConn.SetReadBuffer(7500000); err != nil {
 		return nil, fmt.Errorf("SetReadBuffer: %w", err)
 	}
 
-	if err := conn.SetWriteBuffer(7500000); err != nil {
+	if err := udpConn.SetWriteBuffer(7500000); err != nil {
 		return nil, fmt.Errorf("SetWriteBuffer: %w", err)
 	}
 
 	c := &Conn{
 		lg:           lg,
-		conn:         ipv4.NewPacketConn(conn),
+		conn:         ipv4.NewPacketConn(udpConn),
 		logReadTimer: time.NewTicker(1 * time.Second),
 	}
 
