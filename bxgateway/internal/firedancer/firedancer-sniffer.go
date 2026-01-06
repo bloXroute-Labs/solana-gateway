@@ -81,7 +81,7 @@ func (s *FiredancerSniffer) Recv(ch chan<- netlisten.Shred) {
 			pkt.Packet.Payload = *(*[1228]byte)(unsafe.Pointer(shredInfo.raw_data))
 			pkt.Packet.Length = int(shredInfo.size)
 			pkt.Packet.SrcAddr = netip.Addr{} // No source address for FD
-			pkt.Packet.SrcHandle = nil        // No handle for FD
+			pkt.Packet.SrcHandleName = ""     // No handle for FD
 
 			lastSecondCount++
 			if time.Since(lastStatsTime) >= 1*time.Second {

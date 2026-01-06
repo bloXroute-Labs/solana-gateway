@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/netip"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -24,7 +25,7 @@ const (
 
 	// noTrafficThreshold defines a period within which OFR is suppose to provide traffic,
 	// if no traffic is received then the gateway makes additional Register call
-	noTrafficThreshold = time.Second * 10
+	noTrafficThreshold = time.Second * 5
 )
 
 type Gateway struct {
@@ -42,6 +43,7 @@ type Gateway struct {
 	ofrUDPAddr                udp.Addr
 	registrar                 Registrar
 	noTrafficTicker           *time.Ticker
+	noTrafficCounter          atomic.Int32
 	refreshJWTTicker          *time.Ticker
 	bxForwarder               *txfwd.BxForwarder
 	traderAPIFwd              *txfwd.TraderAPIForwarder
@@ -219,35 +221,40 @@ func (g *Gateway) Register() (syscall.Sockaddr, error) {
 	return sockAddr, nil
 }
 
-func (g *Gateway) Start() {
+func (g *Gateway) Start() error {
 	addr, err := g.Register()
 	if err != nil {
 		g.lg.Errorf("register gateway on startup: %s", err)
 
 		time.Sleep(time.Minute)
 
-		return
+		return err
 	}
 
 	g.lg.Infof("gateway successfully registered, udp addr: %s", udp.SockaddrString(addr))
 
 	go g.reRegister()
 
-	ofrNodeCh := make(chan shredData, 1e3)
+	ofrNodeCh := make(chan shredData, 1e5)
 	go g.receiveShredsFromOFR(ofrNodeCh)
 	go g.broadcastShredsToNode(ofrNodeCh)
 
 	if g.noValidator {
 		go g.sendAliveMessages()
 	} else {
-		node2OFRCh := make(chan netlisten.Shred, 1e3)
+		node2OFRCh := make(chan netlisten.Shred, 1e5)
+
+		go g.broadcastShredsToOFR(node2OFRCh)
+
 		if g.firedancerSniffer != nil {
+			g.lg.Info("using firedancer sniffer")
 			go g.firedancerSniffer.Recv(node2OFRCh)
 		} else {
 			go g.nl.Recv(node2OFRCh)
 		}
-		go g.broadcastShredsToOFR(node2OFRCh)
 	}
+
+	return nil
 }
 
 func (g *Gateway) sendAliveMessages() {
@@ -292,6 +299,7 @@ func (g *Gateway) processShred(broadcastCh chan shredData) (packet shredPacket) 
 	}
 
 	g.noTrafficTicker.Reset(noTrafficThreshold)
+	g.noTrafficCounter.Store(0)
 	if g.passiveMode {
 		return
 	}
@@ -397,20 +405,19 @@ func (g *Gateway) reRegister() {
 	// start monitoring if we need to register again
 	g.noTrafficTicker = time.NewTicker(noTrafficThreshold)
 
-	var failedCount int
-
 	for {
 		select {
 		case <-g.ctx.Done():
 			return
 		case <-g.noTrafficTicker.C:
-			failedCount++
+			g.noTrafficCounter.Add(1)
 
-			if failedCount%3 == 0 {
-				g.lg.Warnf("no traffic from OFR: make sure ports are opened https://docs.bloxroute.com/solana/optimized-feed-relay/requirements")
+			if g.noTrafficCounter.Load()%3 == 0 {
+				const link = "https://docs.bloxroute.com/solana/optimized-feed-relay/requirements"
+				msg := fmt.Sprintf("no traffic from OFR: make sure port %d is opened (see %s)", g.serverFd.Port, link)
+				panic(msg)
 			} else {
 				g.lg.Infof("no traffic from OFR: re-registering gateway...")
-
 			}
 
 			addr, err := g.Register()

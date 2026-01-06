@@ -64,6 +64,11 @@ const (
 	maxDataShredsPerSlot = 32768
 )
 
+var (
+	ErrShredTooSmall = errors.New("shred size too small")
+	ErrShredTooBig   = errors.New("shred size too big")
+)
+
 var AliveMsg = []byte("alive")
 
 func (s *ShredVariantByte) IsCode() bool {
@@ -265,11 +270,11 @@ func validateShredSize(sz int, shredVariant ShredVariantByte) error {
 
 func ValidateShredSizeSimple(size int) error {
 	if size > sizeOfLegacyCodeShredPayload {
-		return errors.New("too big")
+		return ErrShredTooBig
 	}
 
 	if size < sizeOfMerkleDataShredPayload {
-		return errors.New("too small")
+		return ErrShredTooSmall
 	}
 
 	return nil

@@ -1,6 +1,7 @@
 package ofr
 
 import (
+	"context"
 	"fmt"
 	"net/netip"
 	"sort"
@@ -20,9 +21,9 @@ type KeyedCounter[T comparable] struct {
 }
 
 // NewKeyedCounterWithRunner same as NewKeyedCounter but with built-in RunPrettyPrint
-func NewKeyedCounterWithRunner[T comparable](l logger.Logger, delay time.Duration, label string) *KeyedCounter[T] {
+func NewKeyedCounterWithRunner[T comparable](ctx context.Context, l logger.Logger, delay time.Duration, label string) *KeyedCounter[T] {
 	counter := NewKeyedCounter[T]()
-	go counter.RunPrettyPrint(l, delay, label)
+	go counter.RunPrettyPrint(ctx, l, delay, label)
 	return counter
 }
 
@@ -59,14 +60,25 @@ func (m *KeyedCounter[T]) FlushPretty() string {
 	return fmt.Sprintf("[%s]", strings.Join(statsStr, ", "))
 }
 
-func (m *KeyedCounter[T]) RunPrettyPrint(l logger.Logger, label time.Duration, prefix string) {
-	nextLogTime := time.Now().Truncate(label).Add(label)
-	time.Sleep(time.Until(nextLogTime))
+func (m *KeyedCounter[T]) RunPrettyPrint(ctx context.Context, l logger.Logger, delay time.Duration, prefix string) {
+	nextLogTime := time.Now().Truncate(delay).Add(delay)
+
+	select {
+	case <-ctx.Done():
+		return
+	case <-time.After(time.Until(nextLogTime)):
+	}
+
+	ticker := time.NewTicker(delay)
+	defer ticker.Stop()
 
 	for {
-		l.Infof("stats: %s: %s", prefix, m.FlushPretty())
-		nextLogTime = nextLogTime.Add(label)
-		time.Sleep(time.Until(nextLogTime))
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			l.Infof("stats: %s: %s", prefix, m.FlushPretty())
+		}
 	}
 }
 
@@ -83,6 +95,8 @@ type Stats struct {
 
 	flushUnseenShredsChan chan *ShredsBySource
 	regions               sync.Map
+
+	shredProcessingHist *Histogram
 }
 
 type nodeInfo struct {
@@ -183,6 +197,7 @@ func NewStats(lg logger.Logger, timeout time.Duration, opts ...StatsOption) *Sta
 					}
 				}
 			}
+
 		}
 	}()
 
@@ -191,6 +206,13 @@ func NewStats(lg logger.Logger, timeout time.Duration, opts ...StatsOption) *Sta
 
 func (s *Stats) AddRegions(addr string, regions map[string]struct{}) {
 	s.regions.Store(addr, regions)
+}
+
+// RecordShredProcessingTime records the elapsed time from shred receive to send
+func (s *Stats) RecordShredProcessingTime(elapsed int64) {
+	if s.shredProcessingHist != nil {
+		s.shredProcessingHist.Record(elapsed)
+	}
 }
 
 func (s *Stats) logStats(totalShreds *ShredsBySource, unseenShreds *ShredsBySource) {
@@ -227,7 +249,9 @@ func (s *Stats) logStats(totalShreds *ShredsBySource, unseenShreds *ShredsBySour
 	sort.Slice(logEntries, func(i, j int) bool {
 		return logEntries[i].firstSeenShreds > logEntries[j].firstSeenShreds
 	})
+	totalReceivedShreds := 0
 	for _, entry := range logEntries {
+		totalReceivedShreds += entry.totalShreds
 		if entry.regions == "" {
 			s.lg.Infof("%-16s %-7s first seen shreds: %-6d (%-5.2f%%) total shreds: %-6d kpi: %-4.2f", entry.source, entry.nodeType, entry.firstSeenShreds, entry.firstSeenPercentage,
 				entry.totalShreds, entry.kpi)
@@ -235,6 +259,23 @@ func (s *Stats) logStats(totalShreds *ShredsBySource, unseenShreds *ShredsBySour
 			s.lg.Infof("%-16s %-7s first seen shreds: %-6d (%-5.2f%%) total shreds: %-6d kpi: %-4.2f regions: %s", entry.source, entry.nodeType, entry.firstSeenShreds, entry.firstSeenPercentage,
 				entry.totalShreds, entry.kpi, entry.regions)
 		}
+	}
+
+	if s.shredProcessingHist != nil {
+		stats := s.shredProcessingHist.GetStats()
+		if stats.TotalRecorded == 0 {
+			s.lg.Infof("total received shreds: %d, unique shreds forwarded: 0", totalReceivedShreds)
+		} else {
+			s.lg.Infof("total received shreds: %d, unique shreds forwarded: %d", totalReceivedShreds, stats.TotalRecorded)
+			s.lg.Infof("elapsed time (receive→send): P50=%v P75=%v P90=%v P99=%v Max=%v",
+				time.Duration(stats.P50)*time.Microsecond,
+				time.Duration(stats.P75)*time.Microsecond,
+				time.Duration(stats.P90)*time.Microsecond,
+				time.Duration(stats.P99)*time.Microsecond,
+				time.Duration(stats.Max)*time.Microsecond,
+			)
+		}
+		s.shredProcessingHist.Reset()
 	}
 }
 
@@ -260,6 +301,12 @@ type StatsOption func(*Stats)
 func StatsWithFluentD(fd *FluentD) StatsOption {
 	return func(s *Stats) {
 		s.fluentD = fd
+	}
+}
+
+func StatsWithShredProcessingHist() StatsOption {
+	return func(s *Stats) {
+		s.shredProcessingHist = NewHistogram()
 	}
 }
 

@@ -40,7 +40,7 @@ func init() {
 
 const (
 	appName        = "solana-gateway"
-	defaultVersion = "0.2.0h"
+	defaultVersion = "0.10.0h"
 	localhost      = "127.0.0.1"
 
 	gatewayVersionEnv     = "SG_VERSION"
@@ -72,6 +72,7 @@ const (
 	httpPortFlag               = "http-port"
 	dynamicPortRangeFlag       = "dynamic-port-range"
 	firedancerModeFlag         = "firedancer"
+	stakedNodesFlag            = "staked-nodes"
 )
 
 func main() {
@@ -102,6 +103,7 @@ func main() {
 			&cli.IntFlag{Name: httpPortFlag, Value: 8080, Required: false, Usage: "HTTP port for submitting txs to trader api"},
 			&cli.StringFlag{Name: dynamicPortRangeFlag, Value: "18889-19888", Usage: "<MIN_PORT-MAX_PORT> Range to use for dynamically assigned ports for shreds propagation over UDP, should not conflict with solana/agave dynamic port range"},
 			&cli.BoolFlag{Name: firedancerModeFlag, Value: false, Usage: "Run in firedancer mode"},
+			&cli.BoolFlag{Name: stakedNodesFlag, Value: false, Hidden: true},
 		},
 		Action: func(c *cli.Context) error {
 			return run(
@@ -129,6 +131,7 @@ func main() {
 					LogFluentd:                c.Bool(logFluentdFlag),
 					LogFluentdHost:            c.String(logFluentHostFlag),
 					FiredancerMode:            c.Bool(firedancerModeFlag),
+					StakedNodes:               c.Bool(stakedNodesFlag),
 				},
 			)
 		},
@@ -185,6 +188,8 @@ func run(
 		log.Fatalln("init service logger:", err)
 	}
 
+	defer closeLogger()
+
 	gwopts := make([]gateway.Option, 0)
 
 	if cfg.RunHttpServer {
@@ -193,8 +198,6 @@ func run(
 		gwopts = append(gwopts, gateway.WithTxForwarders(bxfwd, traderapifwd))
 		http_server.Run(lg, cfg.HttpPort, bxfwd, traderapifwd)
 	}
-
-	defer closeLogger()
 
 	var (
 		ctx, cancel = context.WithCancel(context.Background())
@@ -237,7 +240,7 @@ func run(
 
 	var nl *netlisten.NetworkListener
 	// assign net listener only when running with validator
-	if !cfg.NoValidator && !cfg.SubmissionOnly {
+	if !cfg.NoValidator && !cfg.SubmissionOnly && !cfg.FiredancerMode {
 		var outPorts []int
 		if cfg.StakedNode {
 			// If the TVU broadcast port is not specified we start listening to
@@ -253,7 +256,8 @@ func run(
 				outPorts = append(outPorts, cfg.SolanaTVUBroadcastPort)
 			}
 		}
-		nl, err = netlisten.NewNetworkListener(ctx, lg, alterKeyCache, stats, cfg.SniffInterface, []int{cfg.SolanaTVUPort}, outPorts)
+
+		nl, err = netlisten.NewNetworkListener(ctx, lg, alterKeyCache, stats, cfg.SniffInterface, cfg.StakedNodes, cfg.SolanaTVUPort, outPorts, cfg.UdpServerPort)
 		if err != nil {
 			lg.Errorf("init network listener: %s", err)
 			return err
@@ -280,9 +284,8 @@ func run(
 	}
 
 	// Ensure we sanitize the auth header before logging it anywhere.
-	re := regexp.MustCompile(`(?mi)-{1,2}auth-header[\s=]{1}(\S*)`)
+	re := regexp.MustCompile(`(?mi)-{1,2}auth-header[\s=](\S*)`)
 	for _, match := range re.FindAllString(cfg.RuntimeEnnvironment.Arguments, -1) {
-		fmt.Println("Match:", match)
 		cfg.RuntimeEnnvironment.Arguments = strings.ReplaceAll(cfg.RuntimeEnnvironment.Arguments, match, "-auth-header=REDACTED")
 	}
 
@@ -310,6 +313,8 @@ func run(
 	}
 
 	if cfg.FiredancerMode {
+		lg.Info("gateway is starting in firedancer mode")
+
 		firedancerSniffer, err := firedancer.NewFiredancerSniffer(ctx, lg, stats, alterKeyCache)
 		if err != nil {
 			lg.Errorf("init firedancer sniffer: %s", err)
@@ -324,7 +329,11 @@ func run(
 		return err
 	}
 
-	gw.Start()
+	lg.Infof("starting solana-gateway version %s", version)
+
+	if err = gw.Start(); err != nil {
+		return err
+	}
 
 	<-sig
 	lg.Info("main: received interrupt signal")

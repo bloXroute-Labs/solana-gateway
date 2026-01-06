@@ -5,60 +5,85 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net"
 	"net/netip"
 	"time"
 
-	"github.com/bloXroute-Labs/solana-gateway/pkg/logger"
-	"github.com/bloXroute-Labs/solana-gateway/pkg/ofr"
-	"github.com/bloXroute-Labs/solana-gateway/pkg/solana"
 	"github.com/google/gopacket"
 	"github.com/google/gopacket/layers"
-	"github.com/google/gopacket/pcap"
+
+	"github.com/bloXroute-Labs/solana-gateway/pkg/logger"
+	"github.com/bloXroute-Labs/solana-gateway/pkg/solana"
 )
 
 const (
-	invalidPacketsStatsInterval = 5 * time.Minute
+	packetLogInterval            = 1200000 // roughly every 10 mins
+	invalidPacketsRatioThreshold = 0.01
 )
 
 type SniffPacket struct {
-	SrcAddr     netip.Addr
-	SrcHandle   *pcap.Handle
-	Payload     [solana.UDPShredSize]byte
-	Length      int
-	ReceiveTime time.Time
+	SrcAddr       netip.Addr
+	SrcHandleName string
+	Payload       [solana.UDPShredSize]byte
+	Length        int
+	ReceiveTime   time.Time
 }
 
-type PacketValidator interface {
+type Validator interface {
 	// Validate is suppose to return nil if packet is considered valid or error otherwise
 	Validate(payload []byte) error
+}
+
+type Counter interface {
+	Increment(key netip.Addr)
 }
 
 type Option func(*Sniffer)
 
 // WithPacketValidator adds possibility to validate packets before allocating memory for them
 // NOTE: validation is blocking so it might slow down the reader in case of heavy cpu-bound operations
-func WithPacketValidator(v PacketValidator) Option {
+func WithPacketValidator(v Validator) Option {
 	return func(s *Sniffer) { s.validators = append(s.validators, v) }
 }
 
-type Sniffer struct {
-	Handle     *pcap.Handle
-	Intolerant bool
-
-	ctx        context.Context
-	lg         logger.Logger
-	logPrefix  string
-	validators []PacketValidator
+// WithIntolerant enables intolerant mode: invalid packets cause the sniffer to stop
+func WithIntolerant(i bool) Option {
+	return func(s *Sniffer) { s.intolerant = i }
 }
 
-func NewSniffer(ctx context.Context, lg logger.Logger, logPrefix string, handle *pcap.Handle, opts ...Option) *Sniffer {
+// WithDynamic sets whether the sniffer is dynamic (is created based on open ports discovery)
+func WithDynamic(d bool) Option {
+	return func(s *Sniffer) { s.dynamic = d }
+}
+
+// WithInvalidPacketsCounter sets the counter for invalid packets
+func WithInvalidPacketsCounter(counter Counter) Option {
+	return func(s *Sniffer) { s.invalidPacketsCounter = counter }
+}
+
+type Sniffer struct {
+	HandleName string
+	handle     Handler
+	intolerant bool
+	dynamic    bool
+
+	ctx                   context.Context
+	lg                    logger.Logger
+	logPrefix             string
+	validators            []Validator
+	counter               int64
+	invalidPackets        int64
+	invalidPacketsCounter Counter
+}
+
+func NewSniffer(ctx context.Context, lg logger.Logger, logPrefix string, handle Handler, handleName string, opts ...Option) *Sniffer {
 	sniffer := &Sniffer{
-		ctx:        ctx,
-		lg:         lg,
-		logPrefix:  logPrefix,
-		Handle:     handle,
-		validators: make([]PacketValidator, 0),
+		handle:                handle,
+		HandleName:            handleName,
+		ctx:                   ctx,
+		lg:                    lg,
+		logPrefix:             logPrefix,
+		validators:            make([]Validator, 0),
+		invalidPacketsCounter: &noopCounter{},
 	}
 
 	for _, opt := range opts {
@@ -69,13 +94,8 @@ func NewSniffer(ctx context.Context, lg logger.Logger, logPrefix string, handle 
 }
 
 func (s *Sniffer) SniffUDPNetworkNoClose(ch chan<- SniffPacket) {
-	defer s.Handle.Close()
+	defer s.handle.Close()
 	done := s.ctx.Done()
-
-	var invalidPacketsCounter *ofr.KeyedCounter[netip.Addr]
-	if !s.Intolerant {
-		invalidPacketsCounter = ofr.NewKeyedCounterWithRunner[netip.Addr](s.lg, invalidPacketsStatsInterval, "N invalid packets from Turbine")
-	}
 
 	var eth layers.Ethernet
 	var ipv4 layers.IPv4
@@ -92,9 +112,10 @@ func (s *Sniffer) SniffUDPNetworkNoClose(ch chan<- SniffPacket) {
 		default:
 		}
 
-		data, _, err := s.Handle.ZeroCopyReadPacketData()
+		data, _, err := s.handle.ZeroCopyReadPacketData()
 		if err != nil {
 			if errors.Is(err, io.EOF) {
+				s.lg.Infof("%s: network listener: EOF received", s.logPrefix)
 				return
 			}
 
@@ -104,20 +125,35 @@ func (s *Sniffer) SniffUDPNetworkNoClose(ch chan<- SniffPacket) {
 
 		pkt, err := s.DecodePacket(parser, &decoded, data, &ipv4, &udp)
 		if err != nil {
-			s.lg.Tracef("%s: network listener: parse udp packet: %s", s.logPrefix, err)
-
-			if s.Intolerant {
+			s.invalidPackets++
+			if s.intolerant || s.dynamic {
+				if s.counter > 0 && float64(s.invalidPackets)/float64(s.counter) < invalidPacketsRatioThreshold {
+					s.lg.Tracef("%s: network listener: invalid packets ratio is below threshold, skipping packet and keeping sniffer alive, invalid packets : %d ratio: %f",
+						s.logPrefix, s.invalidPackets, float64(s.invalidPackets)/float64(s.counter))
+					continue
+				}
+				s.lg.Errorf("%s: network listener: parse udp packet: %s", s.logPrefix, err)
 				return
 			}
 
+			s.lg.Errorf("%s: network listener: parse udp packet: %s", s.logPrefix, err)
+
 			if !pkt.SrcAddr.IsUnspecified() {
-				invalidPacketsCounter.Increment(pkt.SrcAddr)
+				s.invalidPacketsCounter.Increment(pkt.SrcAddr)
 			}
 
 			continue
 		}
 
+		s.counter++
+
+		if s.counter%packetLogInterval == 0 {
+			s.lg.Tracef("%s: network listener: captured %d packets", s.logPrefix, s.counter)
+		}
+
 		select {
+		case <-done:
+			return
 		case ch <- pkt:
 		default:
 			s.lg.Warnf("%s: network listener: forward packet: channel is full", s.logPrefix)
@@ -125,16 +161,11 @@ func (s *Sniffer) SniffUDPNetworkNoClose(ch chan<- SniffPacket) {
 	}
 }
 
-func (s *Sniffer) SniffUDPNetwork(ch chan<- SniffPacket) {
-	defer close(ch)
-	s.SniffUDPNetworkNoClose(ch)
-}
-
 // DecodePacket decodes UDP payload from data ensuring that original bytes are not used
 // in the resulting SniffPacket. If error is returned then the packet should not be returned into the pool.
 // Returns source address if possible.
 func (s *Sniffer) DecodePacket(parser *gopacket.DecodingLayerParser, decoded *[]gopacket.LayerType, data []byte, ipv4 *layers.IPv4, udp *layers.UDP) (pkt SniffPacket, err error) {
-	if err := parser.DecodeLayers(data, decoded); err != nil {
+	if err = parser.DecodeLayers(data, decoded); err != nil {
 		return pkt, fmt.Errorf("decode layers: %w", err)
 	}
 
@@ -152,9 +183,9 @@ func (s *Sniffer) DecodePacket(parser *gopacket.DecodingLayerParser, decoded *[]
 
 	layerPayload := udp.LayerPayload()
 	for _, vdt := range s.validators {
-		err := vdt.Validate(layerPayload)
+		err = vdt.Validate(layerPayload)
 		if err != nil {
-			return pkt, fmt.Errorf("packet validation: %s", err)
+			return pkt, fmt.Errorf("packet validation: %w", err)
 		}
 	}
 
@@ -163,88 +194,17 @@ func (s *Sniffer) DecodePacket(parser *gopacket.DecodingLayerParser, decoded *[]
 
 	// resize if allocated buf if larger than needed
 	// e.g. when the packet we got from the pool used to hold larger payload before
-	pkt.SrcHandle = s.Handle
+	pkt.SrcHandleName = s.HandleName
 	pkt.Length = n
 
 	return
 }
 
-// NewFileSniffHandle reads pcap from file source
-func NewFileSniffHandle(file string) (*pcap.Handle, error) { return pcap.OpenOffline(file) }
-
-func NewUDPNetworkSniffHandle(netInterface string, port int, outgoing bool) (*pcap.Handle, net.IP, error) {
-	h, err := pcap.NewInactiveHandle(netInterface)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	// We keep buffer size to default: 2MB
-	// https://github.com/the-tcpdump-group/libpcap/blob/master/pcap-linux.c#L2680
-	//
-	// From pcap man:
-	//
-	// Packets that arrive for a capture are stored in a buffer,
-	// so that they do not have to be read by the application as
-	// soon as they arrive. On some platforms, the buffer's size
-	// can be set; a size that's too small could mean that, if
-	// too many packets are being captured and the snapshot
-	// length doesn't limit the amount of data that's buffered,
-	// packets could be dropped if the buffer fills up before the
-	// application can read packets from it, while a size that's
-	// too large could use more non-pageable operating system
-	// memory than is necessary to prevent packets from being
-	// dropped.
-
-	if err := h.SetImmediateMode(true); err != nil {
-		return nil, nil, err
-	}
-
-	handle, err := h.Activate()
-	if err != nil {
-		return nil, nil, err
-	}
-
-	inet, err := inetAddr(netInterface)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	dir := "dst"
-	if outgoing {
-		dir = "src"
-	}
-
-	expr := fmt.Sprintf("udp and %s port %d and %s host %s", dir, port, dir, inet)
-	if err = handle.SetBPFFilter(expr); err != nil {
-		return nil, nil, err
-	}
-
-	return handle, inet, nil
+// IsDynamic returns whether the sniffer is dynamic (is created based on open ports discovery)
+func (s *Sniffer) IsDynamic() bool {
+	return s.dynamic
 }
 
-func inetAddr(netInterface string) (net.IP, error) {
-	itf, err := net.InterfaceByName(netInterface)
-	if err != nil {
-		return nil, err
-	}
+type noopCounter struct{}
 
-	addrs, err := itf.Addrs()
-	if err != nil {
-		return nil, err
-	}
-
-	for _, addr := range addrs {
-		switch v := addr.(type) {
-		case *net.IPNet:
-			if v.IP.IsLoopback() {
-				continue
-			}
-
-			if v.IP.To4() != nil {
-				return v.IP, nil
-			}
-		}
-	}
-
-	return nil, fmt.Errorf("inet addr for interface %s not found", netInterface)
-}
+func (n *noopCounter) Increment(netip.Addr) {}

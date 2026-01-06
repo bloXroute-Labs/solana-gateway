@@ -27,6 +27,7 @@ type Gateway struct {
 	LogFluentd                bool               `json:"log_fluentd"`
 	LogFluentdHost            string             `json:"log_fluentd_host"`
 	FiredancerMode            bool               `json:"firedancer_mode"`
+	StakedNodes               bool               `json:"staked_nodes"`
 }
 
 type RuntimeEnvironment struct {
