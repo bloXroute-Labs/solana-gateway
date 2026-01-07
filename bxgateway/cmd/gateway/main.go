@@ -93,7 +93,7 @@ func main() {
 			&cli.IntFlag{Name: ofrPortFlag, Aliases: []string{"bdn-port"}, Value: 8888, Usage: "DEPRECATED - kept to not to crash existing configurations"},
 			&cli.IntFlag{Name: ofrGRPCPortFlag, Aliases: []string{"bdn-grpc-port"}, Value: 5005, Usage: "Closest ofr relay's GRPC port"},
 			&cli.IntFlag{Name: udpServerPortFlag, Value: 18888, Usage: "Localhost UDP port used to run a server for communication with ofr - should be open for inbound and outbound traffic"},
-			&cli.StringFlag{Name: authHeaderFlag, Required: true, Usage: "Auth header issued by bloXroute"},
+			&cli.StringFlag{Name: authHeaderFlag, Required: true, Usage: "Auth header issued by bloXroute", EnvVars: []string{"BX_AUTH_HEADER"}},
 			&cli.StringSliceFlag{Name: broadcastAddressesFlag, Usage: "Sets extra addresses to send shreds received from OFR and Solana Node"},
 			&cli.BoolFlag{Name: broadcastFromOfrOnlyFlag, Aliases: []string{"broadcast-from-bdn-only"}, Usage: "Do not send traffic from Solana Node to extra addresses specified with --broadcast-addresses"},
 			&cli.BoolFlag{Name: noValidatorFlag, Value: false, Usage: "Run gw without node, only for elite/ultra accounts"},
