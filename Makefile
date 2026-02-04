@@ -1,7 +1,7 @@
 VERSION ?= $(shell git describe --tags --always --dirty --match=v0* 2> /dev/null || \
 			cat $(CURDIR)/.version 2> /dev/null || echo v0)
 
-PROTOBUF_IMAGE=bloxroute/bdn-protobuf:v30.2
+PROTOBUF_IMAGE=bloxroute/bdn-protobuf:v33.4
 
 build:
 	@cd bxgateway && go mod vendor

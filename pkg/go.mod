@@ -1,17 +1,16 @@
 module github.com/bloXroute-Labs/solana-gateway/pkg
 
-go 1.24.2
+go 1.25.1
 
 require (
 	github.com/HdrHistogram/hdrhistogram-go v1.2.0
-	github.com/bloXroute-Labs/bxcommon-go v1.1.3-0.20251021075608-b1f3abc9707f
+	github.com/bloXroute-Labs/bxcommon-go v1.1.9
 	github.com/fluent/fluent-logger-golang v1.10.1
-	github.com/golang-jwt/jwt/v5 v5.3.0
 	github.com/google/gopacket v1.1.19
 	github.com/google/uuid v1.6.0
 	github.com/stretchr/testify v1.11.1
-	golang.org/x/net v0.46.0
-	golang.org/x/sys v0.37.0
+	golang.org/x/net v0.49.0
+	golang.org/x/sys v0.40.0
 )
 
 require (
@@ -28,4 +27,4 @@ require (
 )
 
 // This explicitly replaces the old genproto with the new one to avoid ambiguous imports
-replace google.golang.org/genproto => google.golang.org/genproto v0.0.0-20230526203410-71b5a4ffd15e
+replace google.golang.org/genproto => google.golang.org/genproto/googleapis/rpc v0.0.0-20251029180050-ab9386a59fda

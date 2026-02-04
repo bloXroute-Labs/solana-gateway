@@ -1,6 +1,6 @@
 ARG SG_VERSION
 
-FROM golang:1.24.2-bullseye AS builder
+FROM golang:1.25.1-bookworm AS builder
 RUN apt-get update && apt-get install -y --no-install-recommends build-essential libpcap-dev pkg-config ca-certificates && rm -rf /var/lib/apt/lists/*
 
 ARG WORKDIR=/tmp/solana-bdn

@@ -10,12 +10,13 @@ import (
 	"time"
 	"unsafe"
 
+	"github.com/stretchr/testify/assert"
+
 	"github.com/bloXroute-Labs/solana-gateway/pkg/cache"
 	"github.com/bloXroute-Labs/solana-gateway/pkg/logger"
 	"github.com/bloXroute-Labs/solana-gateway/pkg/ofr"
 	"github.com/bloXroute-Labs/solana-gateway/pkg/solana"
 	"github.com/bloXroute-Labs/solana-gateway/pkg/udp"
-	"github.com/stretchr/testify/assert"
 )
 
 // go test -bench=. -benchtime 5s

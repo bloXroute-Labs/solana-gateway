@@ -19,15 +19,13 @@ type Gateway struct {
 	ExtraBroadcastAddrs       []string           `json:"extra_broadcast_addrs"`
 	ExtraBroadcastFromOFROnly bool               `json:"extra_broadcast_from_ofr_only"`
 	NoValidator               bool               `json:"no_validator"`
-	SubmissionOnly            bool               `json:"submission_only"`
 	StakedNode                bool               `json:"staked_node"`
-	RunHttpServer             bool               `json:"run_http_server"`
-	HttpPort                  int                `json:"http_port"`
 	DynamicPortRangeString    string             `json:"dynamic_port_range_string"`
 	LogFluentd                bool               `json:"log_fluentd"`
 	LogFluentdHost            string             `json:"log_fluentd_host"`
 	FiredancerMode            bool               `json:"firedancer_mode"`
 	StakedNodes               bool               `json:"staked_nodes"`
+	DirectForwarding          bool               `json:"direct_forwarding"`
 }
 
 type RuntimeEnvironment struct {

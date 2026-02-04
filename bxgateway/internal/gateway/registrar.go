@@ -10,7 +10,6 @@ import (
 
 type Registrar interface {
 	Register() (*proto.RegisterResponse, error)
-	RefreshToken(token string) (*proto.RefreshTokenResponse, error)
 }
 
 type ofrRegistrar struct {
@@ -33,27 +32,9 @@ func (r *ofrRegistrar) Register() (*proto.RegisterResponse, error) {
 	if err != nil {
 		return nil, fmt.Errorf("ofrRegistrar.Register(): %v", err)
 	}
-	rsp, err := r.client.Register(r.ctx, &proto.RegisterRequest{
+
+	return r.client.Register(r.ctx, &proto.RegisterRequest{
 		AuthHeader:           r.cfg.AuthHeader,
-		Version:              r.cfg.RuntimeEnnvironment.Version,
-		ServerPort:           r.cfg.RuntimeEnnvironment.ServerPort,
 		GatewayConfiguration: bz,
 	})
-	if err != nil {
-		return nil, err
-	}
-
-	return rsp, nil
-}
-
-func (r *ofrRegistrar) RefreshToken(token string) (*proto.RefreshTokenResponse, error) {
-	rsp, err := r.client.RefreshToken(r.ctx, &proto.RefreshTokenRequest{
-		AuthHeader: r.cfg.AuthHeader,
-		JwtToken:   token,
-	})
-	if err != nil {
-		return nil, err
-	}
-
-	return rsp, nil
 }
