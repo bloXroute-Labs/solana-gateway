@@ -192,7 +192,7 @@ func NewStats(lg logger.Logger, timeout time.Duration, opts ...StatsOption) *Sta
 							continue
 						}
 
-						st.fluentD.LogShredStats(ts.Src, uint32(ts.Shreds), uint32(us.Shreds))
+						st.fluentD.LogShredStats(ts.Src, ts.NodeType, uint32(ts.Shreds), uint32(us.Shreds))
 						break
 					}
 				}
@@ -335,12 +335,12 @@ func (s *Stats) RecordShredGateway(slot uint64, index uint32, variant string, so
 	s.fluentD.LogShredGateway(slot, index, variant, source, tm, processTime)
 }
 
-func (s *Stats) RecordShredRelay(slot uint64, index uint32, variant string, source string, tm time.Time, processTime time.Duration) {
+func (s *Stats) RecordShredRelay(slot uint64, index uint32, variant string, source string, sourceType string, tm time.Time, processTime time.Duration) {
 	if s.fluentD == nil {
 		return
 	}
 
-	s.fluentD.LogShredRelay(slot, index, variant, source, tm, processTime)
+	s.fluentD.LogShredRelay(slot, index, variant, source, sourceType, tm, processTime)
 }
 
 // RecvFlushUnseenShreds returns a chan which drops UnseenShredsBySource when flushing for additional logging.

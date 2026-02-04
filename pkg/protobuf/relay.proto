@@ -2,31 +2,18 @@ syntax = "proto3";
 
 package relay;
 option go_package = "github.com/bloXroute-Labs/solana-gateway/pkg/protobuf";
-import "types.proto";
 
 service Relay {
     rpc Register(RegisterRequest) returns (RegisterResponse);
-    rpc RefreshToken(RefreshTokenRequest) returns (RefreshTokenResponse);
 }
 
 message RegisterRequest {
     string auth_header = 1;
-    string version = 2 [deprecated=true];
-    int64 server_port = 3 [deprecated=true];
+    string version = 2 [deprecated = true];
+    int64 server_port = 3 [deprecated = true];
     bytes gateway_configuration = 4;
 }
 
 message RegisterResponse {
     string udp_address = 1;
-    string jwt_token = 2;
-    types.TxPropagationConfig tx_propagation_config = 3;
-}
-
-message RefreshTokenRequest {
-    string auth_header = 1;
-    string jwt_token = 2;
-}
-
-message RefreshTokenResponse {
-    string jwt_token = 1;
 }

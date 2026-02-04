@@ -21,9 +21,7 @@ import (
 
 	"github.com/bloXroute-Labs/solana-gateway/bxgateway/internal/firedancer"
 	"github.com/bloXroute-Labs/solana-gateway/bxgateway/internal/gateway"
-	"github.com/bloXroute-Labs/solana-gateway/bxgateway/internal/http_server"
 	"github.com/bloXroute-Labs/solana-gateway/bxgateway/internal/netlisten"
-	"github.com/bloXroute-Labs/solana-gateway/bxgateway/internal/txfwd"
 	"github.com/bloXroute-Labs/solana-gateway/pkg/cache"
 	"github.com/bloXroute-Labs/solana-gateway/pkg/config"
 	"github.com/bloXroute-Labs/solana-gateway/pkg/logger"
@@ -43,8 +41,7 @@ const (
 	defaultVersion = "0.10.0h"
 	localhost      = "127.0.0.1"
 
-	gatewayVersionEnv     = "SG_VERSION"
-	numOfTraderAPISToSend = 2
+	gatewayVersionEnv = "SG_VERSION"
 )
 
 const (
@@ -66,13 +63,11 @@ const (
 	broadcastAddressesFlag     = "broadcast-addresses"
 	broadcastFromOfrOnlyFlag   = "broadcast-from-ofr-only"
 	noValidatorFlag            = "no-validator"
-	submissionOnlyFlag         = "tx-submission-only"
 	stakedNodeFlag             = "staked-node"
-	runHttpServerFlag          = "run-http-server"
-	httpPortFlag               = "http-port"
 	dynamicPortRangeFlag       = "dynamic-port-range"
 	firedancerModeFlag         = "firedancer"
 	stakedNodesFlag            = "staked-nodes"
+	directForwardingFlag       = "direct-forwarding"
 )
 
 func main() {
@@ -97,13 +92,11 @@ func main() {
 			&cli.StringSliceFlag{Name: broadcastAddressesFlag, Usage: "Sets extra addresses to send shreds received from OFR and Solana Node"},
 			&cli.BoolFlag{Name: broadcastFromOfrOnlyFlag, Aliases: []string{"broadcast-from-bdn-only"}, Usage: "Do not send traffic from Solana Node to extra addresses specified with --broadcast-addresses"},
 			&cli.BoolFlag{Name: noValidatorFlag, Value: false, Usage: "Run gw without node, only for elite/ultra accounts"},
-			&cli.BoolFlag{Name: submissionOnlyFlag, Value: false, Usage: "Disable all gw functionality other than tx submission, only for authorized accounts."},
 			&cli.BoolFlag{Name: stakedNodeFlag, Value: true, Usage: "Run as a stacked node (true by default)"},
-			&cli.BoolFlag{Name: runHttpServerFlag, Value: false, Usage: "Run http server to submit txs to trader api"},
-			&cli.IntFlag{Name: httpPortFlag, Value: 8080, Required: false, Usage: "HTTP port for submitting txs to trader api"},
 			&cli.StringFlag{Name: dynamicPortRangeFlag, Value: "18889-19888", Usage: "<MIN_PORT-MAX_PORT> Range to use for dynamically assigned ports for shreds propagation over UDP, should not conflict with solana/agave dynamic port range"},
 			&cli.BoolFlag{Name: firedancerModeFlag, Value: false, Usage: "Run in firedancer mode"},
 			&cli.BoolFlag{Name: stakedNodesFlag, Value: false, Hidden: true},
+			&cli.BoolFlag{Name: directForwardingFlag, Value: false, Hidden: true},
 		},
 		Action: func(c *cli.Context) error {
 			return run(
@@ -123,10 +116,7 @@ func main() {
 					ExtraBroadcastAddrs:       c.StringSlice(broadcastAddressesFlag),
 					ExtraBroadcastFromOFROnly: c.Bool(broadcastFromOfrOnlyFlag),
 					NoValidator:               c.Bool(noValidatorFlag),
-					SubmissionOnly:            c.Bool(submissionOnlyFlag),
 					StakedNode:                c.Bool(stakedNodeFlag),
-					RunHttpServer:             c.Bool(runHttpServerFlag),
-					HttpPort:                  c.Int(httpPortFlag),
 					DynamicPortRangeString:    c.String(dynamicPortRangeFlag),
 					LogFluentd:                c.Bool(logFluentdFlag),
 					LogFluentdHost:            c.String(logFluentHostFlag),
@@ -146,7 +136,7 @@ func main() {
 func run(
 	cfg *config.Gateway,
 ) error {
-	if !cfg.NoValidator && !cfg.SubmissionOnly && cfg.SniffInterface == "" {
+	if !cfg.NoValidator && cfg.SniffInterface == "" {
 		log.Fatalln("network-interface can't be empty")
 	}
 	version := os.Getenv(gatewayVersionEnv)
@@ -192,13 +182,6 @@ func run(
 
 	gwopts := make([]gateway.Option, 0)
 
-	if cfg.RunHttpServer {
-		bxfwd := txfwd.NewBxForwarder(context.Background(), lg)
-		traderapifwd := txfwd.NewTraderAPIForwarder(lg, numOfTraderAPISToSend, cfg.AuthHeader)
-		gwopts = append(gwopts, gateway.WithTxForwarders(bxfwd, traderapifwd))
-		http_server.Run(lg, cfg.HttpPort, bxfwd, traderapifwd)
-	}
-
 	var (
 		ctx, cancel = context.WithCancel(context.Background())
 		sig         = make(chan os.Signal, 1)
@@ -240,7 +223,7 @@ func run(
 
 	var nl *netlisten.NetworkListener
 	// assign net listener only when running with validator
-	if !cfg.NoValidator && !cfg.SubmissionOnly && !cfg.FiredancerMode {
+	if !cfg.NoValidator && !cfg.FiredancerMode {
 		var outPorts []int
 		if cfg.StakedNode {
 			// If the TVU broadcast port is not specified we start listening to
@@ -269,6 +252,7 @@ func run(
 		lg.Errorf("grpc dial: %s", err)
 		return err
 	}
+	defer conn.Close()
 
 	fdset := udp.NewFDSet(lg, int64(dynamicPortRangeMin), int64(dynamicPortRangeMax))
 	serverFd, err := udp.Server(cfg.UdpServerPort)
@@ -291,12 +275,7 @@ func run(
 
 	registrar := gateway.NewOFRRegistrar(ctx, pb.NewRelayClient(conn), cfg)
 
-	if cfg.SubmissionOnly {
-		gwopts = append(gwopts, gateway.PassiveMode())
-		lg.Warn("gateway is starting in passive mode (packets from OFR are not forwarded to validator)")
-	}
-
-	if cfg.NoValidator || cfg.SubmissionOnly {
+	if cfg.NoValidator {
 		gwopts = append(gwopts, gateway.WithoutSolanaNode())
 		lg.Info("gateway is starting without solana node connection")
 	}

@@ -40,6 +40,7 @@ type (
 	fluentDShredStatsRecord struct {
 		Type         string `json:"type"`
 		PeerIP       string `json:"peer_ip"`
+		PeerType     string `json:"peer_type"`
 		TotalShreds  uint32 `json:"total_shreds"`
 		UnseenShreds uint32 `json:"unseen_shreds"`
 	}
@@ -50,11 +51,24 @@ type (
 		AccountId string `json:"account_id"`
 	}
 
-	fluentDShredRecord struct {
+	// todo: having single package for gateway and relay stats is annoying to maintain,
+	// we need to consider moving to separate internal packages
+
+	fluentDShredRecordGateway struct {
 		Slot        uint64        `json:"slot"`
 		Index       uint32        `json:"index"`
 		Variant     string        `json:"variant"`
 		Source      string        `json:"source"`
+		ReceiveTime time.Time     `json:"receive_time"`
+		ProcessTime time.Duration `json:"process_time"`
+	}
+
+	fluentDShredRecordRelay struct {
+		Slot        uint64        `json:"slot"`
+		Index       uint32        `json:"index"`
+		Variant     string        `json:"variant"`
+		Source      string        `json:"source"`
+		SourceType  string        `json:"source_type"`
 		ReceiveTime time.Time     `json:"receive_time"`
 		ProcessTime time.Duration `json:"process_time"`
 	}
@@ -105,12 +119,14 @@ func (f *FluentD) log(record interface{}, t time.Time, logName string) {
 
 func (f *FluentD) LogShredStats(
 	peerIP string,
+	peerType string,
 	totalShreds uint32,
 	unseenShreds uint32,
 ) {
 	record := &fluentDShredStatsRecord{
 		Type:         fluentDShredStatsRecordType,
 		PeerIP:       peerIP,
+		PeerType:     peerType,
 		TotalShreds:  totalShreds,
 		UnseenShreds: unseenShreds,
 	}
@@ -136,21 +152,30 @@ func (f *FluentD) LogConnectedGateway(
 }
 
 func (f *FluentD) LogShredGateway(slot uint64, index uint32, variant string, source string, tm time.Time, processTime time.Duration) {
-	f.LogShred(fluentDGatewayShreadPropapagationRecordType, slot, index, variant, source, tm, processTime)
-}
-
-func (f *FluentD) LogShredRelay(slot uint64, index uint32, variant string, source string, tm time.Time, processTime time.Duration) {
-	f.LogShred(fluentDRelayShreadPropapagationRecordType, slot, index, variant, source, tm, processTime)
-}
-
-func (f *FluentD) LogShred(recordType string, slot uint64, index uint32, variant string, source string, tm time.Time, processTime time.Duration) {
 	record := Record{
-		Type: recordType,
-		Data: fluentDShredRecord{
+		Type: fluentDGatewayShreadPropapagationRecordType,
+		Data: fluentDShredRecordGateway{
 			Slot:        slot,
 			Index:       index,
 			Variant:     variant,
 			Source:      source,
+			ReceiveTime: tm,
+			ProcessTime: processTime,
+		},
+	}
+
+	f.log(record, time.Now(), fluentDShredLogName)
+}
+
+func (f *FluentD) LogShredRelay(slot uint64, index uint32, variant string, source string, sourceType string, tm time.Time, processTime time.Duration) {
+	record := Record{
+		Type: fluentDRelayShreadPropapagationRecordType,
+		Data: fluentDShredRecordRelay{
+			Slot:        slot,
+			Index:       index,
+			Variant:     variant,
+			Source:      source,
+			SourceType:  sourceType,
 			ReceiveTime: tm,
 			ProcessTime: processTime,
 		},
