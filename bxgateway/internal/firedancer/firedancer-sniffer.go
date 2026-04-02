@@ -1,3 +1,5 @@
+//go:build linux
+
 package firedancer
 
 /*
@@ -113,14 +115,14 @@ func (s *FiredancerSniffer) Recv(ch chan<- netlisten.Shred) {
 			pkt.Shred = shred
 
 			// Use localAddr for stats in both modes
-			s.stats.RecordNewShred(s.localAddr, FireDancerNodeName)
+			s.stats.RecordNewShred(s.localAddr, FireDancerNodeName, "")
 
 			if !s.cache.Set(solana.ShredKey(uint64(shredInfo.slot), uint32(shredInfo.idx), variant)) {
 				s.lg.Debugf("%s: duplicate outgoing shred %d:%d", s.logPrefix, shredInfo.slot, shredInfo.idx)
 				continue
 			}
 
-			s.stats.RecordUnseenShred(s.localAddr, shred, FireDancerNodeName)
+			s.stats.RecordUnseenShred(s.localAddr, shred, FireDancerNodeName, "")
 
 			select {
 			case ch <- pkt:

@@ -26,6 +26,8 @@ type Gateway struct {
 	FiredancerMode            bool               `json:"firedancer_mode"`
 	StakedNodes               bool               `json:"staked_nodes"`
 	DirectForwarding          bool               `json:"direct_forwarding"`
+	NoTrafficCounterLimit     uint               `json:"no_traffic_counter_limit"`
+	SubmissionOnlyDeprecated  bool               `json:"submission_only"` // deprecated, only used in old gateways
 }
 
 type RuntimeEnvironment struct {

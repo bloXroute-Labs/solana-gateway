@@ -1,5 +1,6 @@
 .DS_Store
 .vscode/
+scripts/.env
 
 *.exe
 *.exe~
@@ -16,9 +17,11 @@
 .pcap
 
 target/
+build/
 vendor/
 logs/
 bin
 ssl/
 data-dir/
 relays.json
+xdpdylib/pkg/

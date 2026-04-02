@@ -1,7 +1,7 @@
 github.com/HdrHistogram/hdrhistogram-go v1.2.0 h1:XMJkDWuz6bM9Fzy7zORuVFKH7ZJY41G2q8KWhVGkNiY=
 github.com/HdrHistogram/hdrhistogram-go v1.2.0/go.mod h1:CiIeGiHSd06zjX+FypuEJ5EQ07KKtxZ+8J6hszwVQig=
-github.com/bloXroute-Labs/bxcommon-go v1.1.9 h1:Pxns1ECxR0j8HaVM47S3fdOmFaeUL6B7rngK6UJzHmM=
-github.com/bloXroute-Labs/bxcommon-go v1.1.9/go.mod h1:mpyI9Rr1XnC7J3VmU+R4vpkUgdKxGqTH5jdPHlXdR0s=
+github.com/bloXroute-Labs/bxcommon-go v1.2.1 h1:TBknOAv1XyblWxWMvgIIWvYju50iUl61ZUBsN3/2MDM=
+github.com/bloXroute-Labs/bxcommon-go v1.2.1/go.mod h1:mpyI9Rr1XnC7J3VmU+R4vpkUgdKxGqTH5jdPHlXdR0s=
 github.com/coreos/go-systemd/v22 v22.5.0/go.mod h1:Y58oyj3AT4RCenI/lSvhwexgC+NSVTIJ3seZv2GcEnc=
 github.com/creack/pty v1.1.9/go.mod h1:oKZEueFk5CKHvIhNR5MUki03XCEU+Q6VDXinZuGJ33E=
 github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc h1:U9qPSI2PIWSS1VwoXQT9A3Wy9MM3WgvqSxFWenqJduM=
