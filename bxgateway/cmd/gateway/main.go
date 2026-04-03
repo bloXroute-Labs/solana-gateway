@@ -38,7 +38,7 @@ func init() {
 
 const (
 	appName        = "solana-gateway"
-	defaultVersion = "v0.18.4h"
+	defaultVersion = "v0.18.5h"
 	localhost      = "127.0.0.1"
 
 	gatewayVersionEnv = "SG_VERSION"
