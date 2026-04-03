@@ -38,7 +38,7 @@ func init() {
 
 const (
 	appName        = "solana-gateway"
-	defaultVersion = "0.10.0h"
+	defaultVersion = "v0.18.5h"
 	localhost      = "127.0.0.1"
 
 	gatewayVersionEnv = "SG_VERSION"
@@ -68,6 +68,7 @@ const (
 	firedancerModeFlag         = "firedancer"
 	stakedNodesFlag            = "staked-nodes"
 	directForwardingFlag       = "direct-forwarding"
+	noTrafficCounterLimitFlag  = "no-traffic-counter-limit"
 )
 
 func main() {
@@ -97,6 +98,7 @@ func main() {
 			&cli.BoolFlag{Name: firedancerModeFlag, Value: false, Usage: "Run in firedancer mode"},
 			&cli.BoolFlag{Name: stakedNodesFlag, Value: false, Hidden: true},
 			&cli.BoolFlag{Name: directForwardingFlag, Value: false, Hidden: true},
+			&cli.UintFlag{Name: noTrafficCounterLimitFlag, Value: 60, Hidden: true},
 		},
 		Action: func(c *cli.Context) error {
 			return run(
@@ -122,6 +124,7 @@ func main() {
 					LogFluentdHost:            c.String(logFluentHostFlag),
 					FiredancerMode:            c.Bool(firedancerModeFlag),
 					StakedNodes:               c.Bool(stakedNodesFlag),
+					NoTrafficCounterLimit:     c.Uint(noTrafficCounterLimitFlag),
 				},
 			)
 		},
@@ -300,6 +303,10 @@ func run(
 			return err
 		}
 		gwopts = append(gwopts, gateway.WithFiredancerSniffer(firedancerSniffer))
+	}
+
+	if cfg.NoTrafficCounterLimit > 0 {
+		gwopts = append(gwopts, gateway.WithNoTrafficCounterLimit(cfg.NoTrafficCounterLimit))
 	}
 
 	gw, err := gateway.New(ctx, lg, alterKeyCache, stats, nl, serverFd, fdset, solanaNodeTVUAddr, registrar, gwopts...)

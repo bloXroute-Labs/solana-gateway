@@ -165,7 +165,7 @@ func (s *NetworkListener) Recv(ch chan<- Shred) {
 				i = 0
 			}
 
-			s.stats.RecordNewShred(s.localAddr, "Turbine")
+			s.stats.RecordNewShred(s.localAddr, "Turbine", "")
 
 			if !s.cache.Set(solana.ShredKey(shred.Slot, shred.Index, shred.Variant)) {
 				if pd.outgoing {
@@ -183,7 +183,7 @@ func (s *NetworkListener) Recv(ch chan<- Shred) {
 				noOutgoingTraffic.Reset(noOutgoingTrafficThreshold)
 			}
 
-			s.stats.RecordUnseenShred(s.localAddr, shred, "Turbine")
+			s.stats.RecordUnseenShred(s.localAddr, shred, "Turbine", "")
 
 			if pd.outgoing && shred.Index == 0 {
 				s.lg.Infof("%s: broadcast slot %d", pd, shred.Slot)

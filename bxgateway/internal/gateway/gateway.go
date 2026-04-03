@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/netip"
 	"sync"
@@ -23,7 +24,11 @@ const (
 
 	// noTrafficThreshold defines a period within which OFR is suppose to provide traffic,
 	// if no traffic is received then the gateway makes additional Register call
-	noTrafficThreshold = time.Second * 5
+	noTrafficThreshold           = time.Second * 5
+	defaultNoTrafficCounterLimit = 3
+
+	registerRetryCount    = 3
+	registerRetryInterval = time.Second * 5
 )
 
 type Gateway struct {
@@ -46,6 +51,7 @@ type Gateway struct {
 	extraBroadcastFromOFROnly bool
 	noValidator               bool
 	statsTicker               *time.Ticker
+	noTrafficCounterLimit     uint
 }
 
 type shredPacket struct {
@@ -77,6 +83,12 @@ func WithBroadcastAddrs(addrs []string, ofrOnly bool) (Option, error) {
 
 func WithFiredancerSniffer(firedancerSniffer *firedancer.FiredancerSniffer) Option {
 	return func(g *Gateway) { g.firedancerSniffer = firedancerSniffer }
+}
+
+// WithNoTrafficCounterLimit sets the number of times the gateway will attempt to re-register after
+// no traffic is received from OFR before panicking.
+func WithNoTrafficCounterLimit(limit uint) Option {
+	return func(g *Gateway) { g.noTrafficCounterLimit = limit }
 }
 
 func New(
@@ -119,6 +131,7 @@ func New(
 		extraBroadcastFromOFROnly: false,
 		noValidator:               false,
 		statsTicker:               time.NewTicker(time.Minute),
+		noTrafficCounterLimit:     defaultNoTrafficCounterLimit,
 	}
 
 	for _, o := range opts {
@@ -141,7 +154,7 @@ func (g *Gateway) printUnseenStats() {
 
 		for _, st := range unseenShreds.Stats {
 			totalShreds += st.Shreds
-			if st.Src != localAddrString {
+			if st.SrcString != localAddrString {
 				totalShredsSeenFromOFR += st.Shreds
 			}
 		}
@@ -164,17 +177,17 @@ func (g *Gateway) Register() (syscall.Sockaddr, error) {
 
 	rsp, err := g.registrar.Register()
 	if err != nil {
-		return nil, fmt.Errorf("register gateway: %s", err)
+		return nil, fmt.Errorf("register gateway: %w", err)
 	}
 
 	sockAddr, err := udp.SockAddrFromUDPString(rsp.GetUdpAddress())
 	if err != nil {
-		return nil, fmt.Errorf("resolve OFR UDP address: %s", err)
+		return nil, fmt.Errorf("resolve OFR UDP address: %w", err)
 	}
 
 	addr, err := udp.NewAddr(sockAddr)
 	if err != nil {
-		return nil, fmt.Errorf("parse sockaddr: %s %s", udp.SockaddrString(sockAddr), err)
+		return nil, fmt.Errorf("parse sockaddr %s: %w", udp.SockaddrString(sockAddr), err)
 	}
 
 	g.ofrUDPAddrMx.Lock()
@@ -185,12 +198,24 @@ func (g *Gateway) Register() (syscall.Sockaddr, error) {
 }
 
 func (g *Gateway) Start() error {
-	addr, err := g.Register()
+	var addr syscall.Sockaddr
+	var err error
+
+	for i := 0; i < registerRetryCount; i++ {
+		addr, err = g.Register()
+		if err != nil {
+			if errors.Is(err, ErrInvalidConfig) || errors.Is(err, ErrUnathorized) {
+				break // no need to retry if the error is due to invalid config or unauthorized access
+			}
+
+			g.lg.Errorf("register gateway on startup: %s", err)
+			time.Sleep(registerRetryInterval)
+		} else {
+			break
+		}
+	}
+
 	if err != nil {
-		g.lg.Errorf("register gateway on startup: %s", err)
-
-		time.Sleep(time.Minute)
-
 		return err
 	}
 
@@ -272,11 +297,11 @@ func (g *Gateway) processShred(broadcastCh chan shredData) (packet shredPacket) 
 	}
 
 	g.lg.Tracef("gateway: recv shred, slot: %d, index: %d, from: %s", shred.Slot, shred.Index, addr.NetipAddr.String())
-	g.stats.RecordNewShred(addr.NetipAddr, "OFR")
+	g.stats.RecordNewShred(addr.NetipAddr, "OFR", "")
 	if !g.cache.Set(solana.ShredKey(shred.Slot, shred.Index, shred.Variant)) {
 		return
 	}
-	g.stats.RecordUnseenShred(addr.NetipAddr, shred, "OFR")
+	g.stats.RecordUnseenShred(addr.NetipAddr, shred, "OFR", "")
 	select {
 	case broadcastCh <- shredData{
 		packet: packet,
@@ -366,23 +391,29 @@ func (g *Gateway) reRegister() {
 		case <-g.ctx.Done():
 			return
 		case <-g.noTrafficTicker.C:
-			g.noTrafficCounter.Add(1)
-
-			if g.noTrafficCounter.Load()%3 == 0 {
-				const link = "https://docs.bloxroute.com/solana/optimized-feed-relay/requirements"
-				msg := fmt.Sprintf("no traffic from OFR: make sure port %d is opened (see %s)", g.serverFd.Port, link)
-				panic(msg)
-			}
-
-			g.lg.Infof("no traffic from OFR: re-registering gateway...")
+			g.lg.Warnf("no traffic from OFR: re-registering gateway...")
 
 			addr, err := g.Register()
 			if err != nil {
+				if errors.Is(err, ErrInvalidConfig) || errors.Is(err, ErrUnathorized) {
+					panic(fmt.Sprintf("failed to re-register gateway: %s", err))
+				}
+
 				g.lg.Errorf("no traffic from OFR: re-registering failed: %s", err)
 
 				g.noTrafficTicker.Reset(noTrafficThreshold)
 
 				continue
+			}
+
+			g.noTrafficCounter.Add(1)
+
+			// panic after noTrafficCounterLimit attempts to re-register,
+			// which means that there is no traffic from OFR for noTrafficCounterLimit * noTrafficThreshold duration.
+			if g.noTrafficCounter.Load()%int32(g.noTrafficCounterLimit) == 0 {
+				const link = "https://docs.bloxroute.com/solana/optimized-feed-relay/requirements"
+				msg := fmt.Sprintf("no traffic from OFR: make sure port %d is opened (see %s)", g.serverFd.Port, link)
+				panic(msg)
 			}
 
 			// reset the ticker after the callback is called

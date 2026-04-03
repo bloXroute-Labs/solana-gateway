@@ -13,6 +13,7 @@ const (
 
 	fluentDShredStatsRecordType       = "OFRPerformance"
 	fluentDConnectedGatewayRecordType = "OFRConnectedGateway"
+	fluentDUsageRecordType            = "OFRUsage"
 
 	fluentDGatewayShreadPropapagationRecordType = "OFRGatewayShreadPropapagation"
 	fluentDRelayShreadPropapagationRecordType   = "OFRRelayShreadPropapagation"
@@ -20,6 +21,7 @@ const (
 	fluentDShredStatsLogName       = "stats.ofr_performance"
 	fluentDConnectedGatewayLogName = "stats.ofr_connected_gateway"
 	fluentDShredLogName            = "stats.ofr_shred"
+	fluentDUsageLogName            = "stats.ofr_usage"
 )
 
 // Record represents a bloxroute style stat type record
@@ -49,6 +51,13 @@ type (
 		PeerIP    string `json:"peer_ip"`
 		Version   string `json:"version"`
 		AccountId string `json:"account_id"`
+	}
+
+	fluentDUsageStatsRecord struct {
+		AccountID       string `json:"account_id"`
+		NumGateways     uint32 `json:"num_gateways"`
+		NumShredstreams uint32 `json:"num_shred_streams"`
+		NumTxStreams    uint32 `json:"num_tx_streams"`
 	}
 
 	// todo: having single package for gateway and relay stats is annoying to maintain,
@@ -132,6 +141,25 @@ func (f *FluentD) LogShredStats(
 	}
 
 	f.log(record, time.Now(), fluentDShredStatsLogName)
+}
+
+func (f *FluentD) LogUsageStats(
+	accountID string,
+	numGateways int,
+	numShredStreams int,
+	numTxStreams int,
+) {
+	record := Record{
+		Type: fluentDUsageRecordType,
+		Data: fluentDUsageStatsRecord{
+			AccountID:       accountID,
+			NumGateways:     uint32(numGateways),
+			NumShredstreams: uint32(numShredStreams),
+			NumTxStreams:    uint32(numTxStreams),
+		},
+	}
+
+	f.log(record, time.Now(), fluentDUsageLogName)
 }
 
 func (f *FluentD) LogConnectedGateway(

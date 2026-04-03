@@ -97,29 +97,28 @@ type Stats struct {
 	regions               sync.Map
 
 	shredProcessingHist *Histogram
+	writeElapsedHist    *Histogram
+	batchSizeHist       *Histogram
+	onStatsFlush        func(totalShreds *ShredsBySource, unseenShreds *ShredsBySource)
 }
 
-type nodeInfo struct {
-	addr     netip.Addr
-	nodeType string
+type NodeInfo struct {
+	Src      netip.Addr
+	NodeType string
+	Name     string // optional, for informational purposes only
 }
 
 type (
-	shredsAndInfo struct {
-		shreds   int
-		nodeType string
-	}
-
 	shredsBySrcRecorder struct {
-		ch chan nodeInfo
-		mp map[netip.Addr]*shredsAndInfo // addr: shredsInfo
+		ch chan NodeInfo
+		mp map[netip.Addr]*ShredsBySrcRecord
 		mx sync.Mutex
 	}
 
 	ShredsBySrcRecord struct {
-		Src      string
-		Shreds   int
-		NodeType string
+		Shreds    int
+		NodeInfo  NodeInfo
+		SrcString string // cached from NodeInfo.src.String()
 	}
 )
 
@@ -145,7 +144,7 @@ type (
 		totalShreds         int
 		firstSeenPercentage float64
 		kpi                 float64
-		nodeType            string
+		nodeInfo            NodeInfo
 		regions             string
 	}
 )
@@ -183,16 +182,21 @@ func NewStats(lg logger.Logger, timeout time.Duration, opts ...StatsOption) *Sta
 			}
 			st.logStats(totalShreds, unseenShreds)
 
+			// Call the callback after logging stats
+			if st.onStatsFlush != nil {
+				st.onStatsFlush(totalShreds, unseenShreds)
+			}
+
 			st.firstShredRecorder.clean()
 
 			if st.fluentD != nil {
 				for _, ts := range totalShreds.Stats {
 					for _, us := range unseenShreds.Stats {
-						if ts.Src != us.Src {
+						if ts.SrcString != us.SrcString {
 							continue
 						}
 
-						st.fluentD.LogShredStats(ts.Src, ts.NodeType, uint32(ts.Shreds), uint32(us.Shreds))
+						st.fluentD.LogShredStats(ts.SrcString, ts.NodeInfo.NodeType, uint32(ts.Shreds), uint32(us.Shreds))
 						break
 					}
 				}
@@ -208,10 +212,29 @@ func (s *Stats) AddRegions(addr string, regions map[string]struct{}) {
 	s.regions.Store(addr, regions)
 }
 
+// SetFlushCallback sets the callback to be called after stats are flushed and logged
+func (s *Stats) SetFlushCallback(callback func(totalShreds *ShredsBySource, unseenShreds *ShredsBySource)) {
+	s.onStatsFlush = callback
+}
+
 // RecordShredProcessingTime records the elapsed time from shred receive to send
 func (s *Stats) RecordShredProcessingTime(elapsed int64) {
 	if s.shredProcessingHist != nil {
 		s.shredProcessingHist.Record(elapsed)
+	}
+}
+
+// RecordWriteElapsed records the elapsed time on write operation
+func (s *Stats) RecordWriteElapsed(elapsed int64) {
+	if s.writeElapsedHist != nil {
+		s.writeElapsedHist.Record(elapsed)
+	}
+}
+
+// RecordBatchSize records the size of the batch
+func (s *Stats) RecordBatchSize(size int64) {
+	if s.batchSizeHist != nil {
+		s.batchSizeHist.Record(size)
 	}
 }
 
@@ -226,7 +249,7 @@ func (s *Stats) logStats(totalShreds *ShredsBySource, unseenShreds *ShredsBySour
 		unseenCount := 0
 
 		for _, unseen := range unseenShreds.Stats {
-			if unseen.Src == total.Src {
+			if unseen.SrcString == total.SrcString {
 				unseenCount = unseen.Shreds
 				break
 			}
@@ -241,9 +264,15 @@ func (s *Stats) logStats(totalShreds *ShredsBySource, unseenShreds *ShredsBySour
 		if total.Shreds > 0 {
 			kpi = float64(unseenCount) / float64(total.Shreds)
 		}
+
 		logEntries = append(logEntries, logEntry{
-			source: total.Src, firstSeenShreds: unseenCount, totalShreds: total.Shreds,
-			firstSeenPercentage: firstSeenPercentage, kpi: kpi, nodeType: total.NodeType, regions: s.mapKeysToString(total.Src, &s.regions),
+			source:              total.SrcString,
+			firstSeenShreds:     unseenCount,
+			totalShreds:         total.Shreds,
+			firstSeenPercentage: firstSeenPercentage,
+			kpi:                 kpi,
+			nodeInfo:            total.NodeInfo,
+			regions:             s.mapKeysToString(total.SrcString, &s.regions),
 		})
 	}
 	sort.Slice(logEntries, func(i, j int) bool {
@@ -252,13 +281,22 @@ func (s *Stats) logStats(totalShreds *ShredsBySource, unseenShreds *ShredsBySour
 	totalReceivedShreds := 0
 	for _, entry := range logEntries {
 		totalReceivedShreds += entry.totalShreds
-		if entry.regions == "" {
-			s.lg.Infof("%-16s %-7s first seen shreds: %-6d (%-5.2f%%) total shreds: %-6d kpi: %-4.2f", entry.source, entry.nodeType, entry.firstSeenShreds, entry.firstSeenPercentage,
-				entry.totalShreds, entry.kpi)
-		} else {
-			s.lg.Infof("%-16s %-7s first seen shreds: %-6d (%-5.2f%%) total shreds: %-6d kpi: %-4.2f regions: %s", entry.source, entry.nodeType, entry.firstSeenShreds, entry.firstSeenPercentage,
-				entry.totalShreds, entry.kpi, entry.regions)
+
+		var logLine []string
+		logLine = append(logLine, fmt.Sprintf(
+			"%-16s %-7s first seen shreds: %-6d (%-5.2f%%) total shreds: %-6d kpi: %-4.2f",
+			entry.source, entry.nodeInfo.NodeType, entry.firstSeenShreds, entry.firstSeenPercentage, entry.totalShreds, entry.kpi,
+		))
+
+		if entry.regions != "" {
+			logLine = append(logLine, fmt.Sprintf("regions: %s", entry.regions))
 		}
+
+		if entry.nodeInfo.Name != "" {
+			logLine = append(logLine, fmt.Sprintf("name: %s", entry.nodeInfo.Name))
+		}
+
+		s.lg.Info(strings.Join(logLine, " "))
 	}
 
 	if s.shredProcessingHist != nil {
@@ -276,6 +314,34 @@ func (s *Stats) logStats(totalShreds *ShredsBySource, unseenShreds *ShredsBySour
 			)
 		}
 		s.shredProcessingHist.Reset()
+	}
+
+	if s.writeElapsedHist != nil {
+		stats := s.writeElapsedHist.GetStats()
+		if stats.TotalRecorded == 0 {
+			s.lg.Infof("write elapsed: 0")
+		} else {
+			s.lg.Infof("write elapsed: P50=%v P75=%v P90=%v P99=%v Max=%v",
+				time.Duration(stats.P50)*time.Microsecond,
+				time.Duration(stats.P75)*time.Microsecond,
+				time.Duration(stats.P90)*time.Microsecond,
+				time.Duration(stats.P99)*time.Microsecond,
+				time.Duration(stats.Max)*time.Microsecond,
+			)
+		}
+		s.writeElapsedHist.Reset()
+	}
+
+	if s.batchSizeHist != nil {
+		stats := s.batchSizeHist.GetStats()
+		if stats.TotalRecorded == 0 {
+			s.lg.Infof("batch size: 0")
+		} else {
+			s.lg.Infof("batch size: P50=%v P75=%v P90=%v P99=%v Max=%v",
+				stats.P50, stats.P75, stats.P90, stats.P99, stats.Max,
+			)
+		}
+		s.batchSizeHist.Reset()
 	}
 }
 
@@ -310,12 +376,42 @@ func StatsWithShredProcessingHist() StatsOption {
 	}
 }
 
-func (s *Stats) RecordNewShred(src netip.Addr, nodeType string) {
-	s.totalShredsRecorder.record(src, nodeType)
+func StatsWithWriteElapsedHist() StatsOption {
+	return func(s *Stats) {
+		s.writeElapsedHist = NewHistogram()
+	}
 }
 
-func (s *Stats) RecordUnseenShred(src netip.Addr, shred solana.PartialShred, nodeType string) {
-	s.unseenShredsRecorder.record(src, nodeType)
+func StatsWithBatchSizeHist() StatsOption {
+	return func(s *Stats) {
+		s.batchSizeHist = NewHistogram()
+	}
+}
+
+func StatsWithFlushCallback(callback func(totalShreds *ShredsBySource, unseenShreds *ShredsBySource)) StatsOption {
+	return func(s *Stats) {
+		s.onStatsFlush = callback
+	}
+}
+
+func (s *Stats) RecordNewShred(src netip.Addr, nodeType string, name string) {
+	n := NodeInfo{
+		Src:      src,
+		NodeType: nodeType,
+		Name:     name,
+	}
+
+	s.totalShredsRecorder.record(n)
+}
+
+func (s *Stats) RecordUnseenShred(src netip.Addr, shred solana.PartialShred, nodeType string, name string) {
+	n := NodeInfo{
+		Src:      src,
+		NodeType: nodeType,
+		Name:     name,
+	}
+
+	s.unseenShredsRecorder.record(n)
 	s.firstShredRecorder.record(src, shred)
 }
 
@@ -350,8 +446,8 @@ func (s *Stats) RecvFlushUnseenShreds() chan *ShredsBySource {
 
 func newShredsBySrcRecorder() *shredsBySrcRecorder {
 	rec := &shredsBySrcRecorder{
-		ch: make(chan nodeInfo, shredsRecorderChanBuf),
-		mp: make(map[netip.Addr]*shredsAndInfo),
+		ch: make(chan NodeInfo, shredsRecorderChanBuf),
+		mp: make(map[netip.Addr]*ShredsBySrcRecord),
 	}
 
 	go rec.run()
@@ -422,9 +518,9 @@ func (r *firstShredRecorder) clean() {
 	r.mx.Unlock()
 }
 
-func (r *shredsBySrcRecorder) record(src netip.Addr, nodeType string) {
+func (r *shredsBySrcRecorder) record(nodeInfo NodeInfo) {
 	select {
-	case r.ch <- nodeInfo{src, nodeType}:
+	case r.ch <- nodeInfo:
 	default:
 	}
 }
@@ -432,10 +528,14 @@ func (r *shredsBySrcRecorder) record(src netip.Addr, nodeType string) {
 func (r *shredsBySrcRecorder) run() {
 	for info := range r.ch {
 		r.mx.Lock()
-		if v, ok := r.mp[info.addr]; ok {
-			v.shreds += 1
+		if v, ok := r.mp[info.Src]; ok {
+			v.Shreds += 1
 		} else {
-			r.mp[info.addr] = &shredsAndInfo{1, info.nodeType}
+			r.mp[info.Src] = &ShredsBySrcRecord{
+				Shreds:    1,
+				NodeInfo:  info,
+				SrcString: info.Src.String(),
+			}
 		}
 		r.mx.Unlock()
 	}
@@ -445,13 +545,8 @@ func (r *shredsBySrcRecorder) flush() *ShredsBySource {
 	stats := make([]*ShredsBySrcRecord, 0)
 
 	r.mx.Lock()
-	for src, info := range r.mp {
-		stats = append(stats, &ShredsBySrcRecord{
-			Src:      src.String(),
-			Shreds:   info.shreds,
-			NodeType: info.nodeType,
-		})
-
+	for src, record := range r.mp {
+		stats = append(stats, record)
 		delete(r.mp, src)
 	}
 	r.mx.Unlock()

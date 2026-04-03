@@ -4,7 +4,7 @@ go 1.25.1
 
 require (
 	github.com/HdrHistogram/hdrhistogram-go v1.2.0
-	github.com/bloXroute-Labs/bxcommon-go v1.1.9
+	github.com/bloXroute-Labs/bxcommon-go v1.2.1
 	github.com/fluent/fluent-logger-golang v1.10.1
 	github.com/google/gopacket v1.1.19
 	github.com/google/uuid v1.6.0
