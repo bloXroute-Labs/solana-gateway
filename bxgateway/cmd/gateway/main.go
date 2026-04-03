@@ -98,7 +98,7 @@ func main() {
 			&cli.BoolFlag{Name: firedancerModeFlag, Value: false, Usage: "Run in firedancer mode"},
 			&cli.BoolFlag{Name: stakedNodesFlag, Value: false, Hidden: true},
 			&cli.BoolFlag{Name: directForwardingFlag, Value: false, Hidden: true},
-			&cli.UintFlag{Name: noTrafficCounterLimitFlag, Value: 3, Hidden: true},
+			&cli.UintFlag{Name: noTrafficCounterLimitFlag, Value: 12, Hidden: true},
 		},
 		Action: func(c *cli.Context) error {
 			return run(
