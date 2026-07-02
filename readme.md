@@ -1,3 +1,10 @@
+> [!WARNING]
+> **The OFR Gateway is now deprecated.**
+>
+> bloXroute has deprecated the OFR Gateway in favor of **OFR Shred Stream** — a faster, simpler, and more reliable way to receive Solana shreds. As of **July 1, 2026**, the OFR Gateway is no longer supported for new or existing integrations.
+>
+> **We strongly encourage all users to migrate to [OFR ShredStream](https://docs.bloxroute.com/solana/optimized-feed-relay/shred-stream).**
+
 [![](images/logo.png)](https://bloxroute.com)
 <p align="center">
   <a href="https://github.com/bloXroute-Labs/solana-gateway/blob/main/LICENSE.md">
